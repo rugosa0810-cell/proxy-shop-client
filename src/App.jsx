@@ -1388,7 +1388,7 @@ function MainApp({lineUser,data,setData}){
     }
   }, [tab, reloadData]);
 
-  const myOrders=data.orders.filter(o=>o.customer_line_id===lineUser.userId||o.customerId==="me");
+  const myOrders=data.orders.filter(o=>(o.customer_line_id===lineUser.userId||o.customerId==="me") && !o.archived);
   const myWishes=data.wishlist.filter(w=>w.customer_line_id===lineUser.userId||w.customerId==="me");
 
   const addToCart=item=>{
