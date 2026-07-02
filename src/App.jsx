@@ -511,13 +511,25 @@ function ProductDetailSheet({product,onAdd,onClose,rate}){
         const varLabel=Object.entries(selVariants).map(([g,v])=>`${g}:${v}`).join(" / ");
         const itemName=`${sanitize(product.name)}${varLabel?` / ${varLabel}`:""}`;
         const cartId=product.id+JSON.stringify(selVariants);
+        // 從選中款式讀取成本 (若無款式或沒設,cost=0 讓業者手動填)
+        let selectedCost=0;
+        if(hasVariants){
+          const selectedOpts=Object.entries(selVariants).map(([g,label])=>{
+            const group=variantGroups.find(([gName])=>gName===g);
+            return group?.[1]?.find(o=>o.label===label);
+          }).filter(Boolean);
+          if(selectedOpts.length>0){
+            selectedCost=Math.max(...selectedOpts.map(o=>Number(o.cost)||0));
+          }
+        }
         for(let i=0;i<qty;i++)onAdd({
           ...product,
           id:cartId,
           name:itemName,
           price:safePrice(twdPrice),
+          cost: selectedCost,  // 帶款式成本
           payment_type: product.payment_type || "full",
-          deposit_amount: selectedDeposit || 0,  // 用選中款式的訂金
+          deposit_amount: selectedDeposit || 0,
         });
         onClose();
       }}>{!allSelected?"請選擇規格":"加入購物車"}</Btn>
@@ -1394,18 +1406,21 @@ function MainApp({lineUser,data,setData}){
       name:sanitize(c.name,100),
       qty:safeQty(c.qty),
       price:safePrice(c.price),
+      cost:Number(c.cost)||0,
       note:sanitize(c.note||"",200),
       image:c.image||"",
       payment_type: c.payment_type || "full",
       deposit_amount: Number(c.deposit_amount) || 0,
     }));
     const total=items.reduce((s,c)=>s+c.price*c.qty,0);
+    const totalCost=items.reduce((s,c)=>s+c.cost*c.qty,0);
+    const profit=total-totalCost;
     const orderData={
       id:secureUid(),no,
       customer_line_id:lineUser.userId,
       customer_name:sanitize(lineUser.name,50)||"匿名",
       status:"pending_review",
-      items,total,
+      items,total,profit,
       deposit_amount: Number(payInfo.payAmount) || 0,
       deposit_last5: sanitize(payInfo.payLast5 || "", 5),
       deposit_bank: sanitize(payInfo.payBank || "", 100),
