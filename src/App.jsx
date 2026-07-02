@@ -413,14 +413,16 @@ function ProductDetailSheet({product,onAdd,onClose,rate}){
   const hasRange=variantPrices.length>1&&maxPrice>minPrice;
 
   let twdPrice=minPrice; // 預設顯示最低價
+  let selectedDeposit=0; // 從選中款式讀取的訂金
   if(hasVariants){
     const selectedOpts=Object.entries(selVariants).map(([g,label])=>{
       const group=variantGroups.find(([gName])=>gName===g);
       return group?.[1]?.find(o=>o.label===label);
     }).filter(Boolean);
     if(selectedOpts.length>0){
-      // 有選款式:顯示該款式的售價
+      // 有選款式:顯示該款式的售價和訂金
       twdPrice=Math.max(...selectedOpts.map(o=>Number(o.price)||0));
+      selectedDeposit=Math.max(...selectedOpts.map(o=>Number(o.deposit_amount)||0));
     }
   }
   const someSelected=Object.keys(selVariants).length>0;
@@ -442,13 +444,15 @@ function ProductDetailSheet({product,onAdd,onClose,rate}){
               :`$${minPrice} - $${maxPrice}`}
           </div>
           {/* 付款方式提示 */}
-          {product.payment_type === "deposit" && product.deposit_amount > 0 ? (
+          {product.payment_type === "deposit" && selectedDeposit > 0 ? (
             <div style={{fontSize:12,color:C.accent,marginTop:6,fontWeight:500}}>
-              訂金 NT$ {product.deposit_amount}
+              訂金 NT$ {selectedDeposit}
               <span style={{color:C.muted,fontWeight:400,marginLeft:6}}>
-                尾款 NT$ {Math.max(0, (twdPrice||0)*qty - product.deposit_amount*qty)} 取貨時付
+                尾款 NT$ {Math.max(0, (twdPrice||0) - selectedDeposit)} 取貨時付
               </span>
             </div>
+          ) : product.payment_type === "deposit" ? (
+            <div style={{fontSize:12,color:C.muted,marginTop:6}}>💰 先付訂金 · 請選擇款式查看訂金金額</div>
           ) : product.payment_type === "cod" ? (
             <div style={{fontSize:12,color:C.accent,marginTop:6,fontWeight:500}}>💰 貨到付款</div>
           ) : (
@@ -513,7 +517,7 @@ function ProductDetailSheet({product,onAdd,onClose,rate}){
           name:itemName,
           price:safePrice(twdPrice),
           payment_type: product.payment_type || "full",
-          deposit_amount: Number(product.deposit_amount) || 0,
+          deposit_amount: selectedDeposit || 0,  // 用選中款式的訂金
         });
         onClose();
       }}>{!allSelected?"請選擇規格":"加入購物車"}</Btn>
