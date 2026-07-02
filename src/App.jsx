@@ -441,7 +441,19 @@ function ProductDetailSheet({product,onAdd,onClose,rate}){
               ?fmtMoney(twdPrice)
               :`$${minPrice} - $${maxPrice}`}
           </div>
-          <div style={{fontSize:11,color:C.muted,marginTop:4}}>實際金額以業者確認為準</div>
+          {/* 付款方式提示 */}
+          {product.payment_type === "deposit" && product.deposit_amount > 0 ? (
+            <div style={{fontSize:12,color:C.accent,marginTop:6,fontWeight:500}}>
+              訂金 NT$ {product.deposit_amount}
+              <span style={{color:C.muted,fontWeight:400,marginLeft:6}}>
+                尾款 NT$ {Math.max(0, (twdPrice||0)*qty - product.deposit_amount*qty)} 取貨時付
+              </span>
+            </div>
+          ) : product.payment_type === "cod" ? (
+            <div style={{fontSize:12,color:C.accent,marginTop:6,fontWeight:500}}>💰 貨到付款</div>
+          ) : (
+            <div style={{fontSize:11,color:C.muted,marginTop:4}}>實際金額以業者確認為準</div>
+          )}
         </div>
       ):(
         <div style={{background:C.accentBg,borderRadius:C.rSm,padding:"16px 18px"}}>
@@ -492,10 +504,17 @@ function ProductDetailSheet({product,onAdd,onClose,rate}){
         </div>
       </div>
       <Btn full disabled={!allSelected} onClick={()=>{
-        const varLabel=Object.entries(selVariants).map(([g,v])=>`${g}：${v}`).join(" / ");
+        const varLabel=Object.entries(selVariants).map(([g,v])=>`${g}:${v}`).join(" / ");
         const itemName=`${sanitize(product.name)}${varLabel?` / ${varLabel}`:""}`;
         const cartId=product.id+JSON.stringify(selVariants);
-        for(let i=0;i<qty;i++)onAdd({...product,id:cartId,name:itemName,price:safePrice(twdPrice)});
+        for(let i=0;i<qty;i++)onAdd({
+          ...product,
+          id:cartId,
+          name:itemName,
+          price:safePrice(twdPrice),
+          payment_type: product.payment_type || "full",
+          deposit_amount: Number(product.deposit_amount) || 0,
+        });
         onClose();
       }}>{!allSelected?"請選擇規格":"加入購物車"}</Btn>
     </div>
@@ -657,10 +676,74 @@ function CatalogTab({products,inStock,rate,cart,onAdd,showCart,setShowCart,updat
                   {i<cart.length-1&&<HR/>}
                 </div>
               ))}
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"16px 0",borderTop:`1px solid ${C.border}`,marginTop:8}}>
-                <div style={{fontSize:13,color:C.muted}}>{cart.length} 項商品</div>
-                <div style={{fontSize:20,fontWeight:700,color:C.text}}>{fmtMoney(cart.reduce((s,c)=>s+safePrice(c.price)*safeQty(c.qty),0))}</div>
-              </div>
+              {/* 金額明細 */}
+              {(()=>{
+                const subtotal = cart.reduce((s,c)=>s+safePrice(c.price)*safeQty(c.qty),0);
+                let depositSum = 0;   // 訂金總和(先付訂金的商品)
+                let fullPaySum = 0;   // 付全款總和(現在要付)
+                let codSum = 0;       // 貨到付款總和(到貨才付)
+                let remainSum = 0;    // 尾款總和(訂金商品的剩餘)
+                cart.forEach(c => {
+                  const pt = c.payment_type || "full";
+                  const total = safePrice(c.price) * safeQty(c.qty);
+                  if (pt === "deposit") {
+                    const dep = (Number(c.deposit_amount)||0) * safeQty(c.qty);
+                    const actualDep = Math.min(dep, total);
+                    depositSum += actualDep;
+                    remainSum += Math.max(0, total - actualDep);
+                  } else if (pt === "cod") {
+                    codSum += total;
+                  } else {
+                    fullPaySum += total;
+                  }
+                });
+                const payNow = depositSum + fullPaySum;
+                const payLater = remainSum + codSum;
+                return (
+                  <div style={{background:C.bgDeep,borderRadius:C.rSm,padding:"14px 16px",marginBottom:12,marginTop:8,border:`1px solid ${C.border}`}}>
+                    <div style={{fontSize:11,color:C.muted,marginBottom:10,letterSpacing:.5,fontWeight:600}}>金額明細</div>
+                    <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                      <div style={{display:"flex",justifyContent:"space-between",fontSize:13}}>
+                        <span style={{color:C.textMid}}>商品小計</span>
+                        <span style={{color:C.text}}>{fmtMoney(subtotal)}</span>
+                      </div>
+                      {depositSum>0 && (
+                        <div style={{display:"flex",justifyContent:"space-between",fontSize:13}}>
+                          <span style={{color:C.textMid}}>訂金(現在付)</span>
+                          <span style={{color:C.accent,fontWeight:600}}>{fmtMoney(depositSum)}</span>
+                        </div>
+                      )}
+                      {fullPaySum>0 && (
+                        <div style={{display:"flex",justifyContent:"space-between",fontSize:13}}>
+                          <span style={{color:C.textMid}}>全款(現在付)</span>
+                          <span style={{color:C.accent,fontWeight:600}}>{fmtMoney(fullPaySum)}</span>
+                        </div>
+                      )}
+                      {remainSum>0 && (
+                        <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:C.muted}}>
+                          <span>尾款(取貨時付)</span>
+                          <span>{fmtMoney(remainSum)}</span>
+                        </div>
+                      )}
+                      {codSum>0 && (
+                        <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:C.muted}}>
+                          <span>貨到付款</span>
+                          <span>{fmtMoney(codSum)}</span>
+                        </div>
+                      )}
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0 0",borderTop:`1px solid ${C.border}`,marginTop:6}}>
+                        <span style={{fontSize:14,fontWeight:600,color:C.text}}>現在應付</span>
+                        <span style={{fontSize:20,fontWeight:700,color:C.accent}}>{fmtMoney(payNow)}</span>
+                      </div>
+                      {payLater>0 && (
+                        <div style={{fontSize:10,color:C.muted,textAlign:"right",lineHeight:1.5}}>
+                          尾款 {fmtMoney(payLater)} 於商品到貨時付
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* 付款資訊輸入 (必填) */}
               <div style={{background:C.bgDeep,borderRadius:C.rSm,padding:"14px 16px",marginBottom:12,border:`1px solid ${C.border}`}}>
@@ -1303,7 +1386,15 @@ function MainApp({lineUser,data,setData}){
   const submitOrder=async(payInfo={})=>{
     if(!cart.length)return;
     const no=secureOrderNo();
-    const items=cart.map(c=>({name:sanitize(c.name,100),qty:safeQty(c.qty),price:safePrice(c.price),note:sanitize(c.note||"",200),image:c.image||""}));
+    const items=cart.map(c=>({
+      name:sanitize(c.name,100),
+      qty:safeQty(c.qty),
+      price:safePrice(c.price),
+      note:sanitize(c.note||"",200),
+      image:c.image||"",
+      payment_type: c.payment_type || "full",
+      deposit_amount: Number(c.deposit_amount) || 0,
+    }));
     const total=items.reduce((s,c)=>s+c.price*c.qty,0);
     const orderData={
       id:secureUid(),no,
