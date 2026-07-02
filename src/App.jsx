@@ -59,6 +59,13 @@ const safeQty = n => { const v=parseInt(n,10); return Number.isFinite(v)&&v>=1&&
 const safePrice = n => { const v=Number(n); return Number.isFinite(v)&&v>=0?Math.round(v*100)/100:0; };
 const secureOrderNo = () => { const a=new Uint32Array(1); crypto.getRandomValues(a); return String(100000+(a[0]%900000)); };
 const fmtMoney = n => `NT$ ${Number(n||0).toLocaleString()}`;
+const formatShortDate = d => {
+  if (!d) return "";
+  try {
+    const dt = new Date(d);
+    return `${dt.getFullYear()}/${String(dt.getMonth()+1).padStart(2,"0")}/${String(dt.getDate()).padStart(2,"0")}`;
+  } catch { return d; }
+};
 
 // 解析品項名稱：拆出商品名稱和規格/款式
 const parseItemName = (name) => {
@@ -441,6 +448,24 @@ function ProductDetailSheet({product,onAdd,onClose,rate}){
           <div style={{fontSize:14,color:C.muted}}>價格洽詢</div>
         </div>
       )}
+
+      {/* 結單日期 / 預計到貨 */}
+      {(product.deadline || product.expected_arrival) && (
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+          {product.deadline && (
+            <div style={{ flex:1, minWidth:130, background:C.bgDeep, borderRadius:C.rSm, padding:"10px 12px", border:`1px solid ${C.borderLight}` }}>
+              <div style={{ fontSize:10, color:C.faint, letterSpacing:.5, marginBottom:3, fontWeight:600 }}>⏰ 結單日期</div>
+              <div style={{ fontSize:13, color:C.text, fontWeight:500 }}>{formatShortDate(product.deadline)}</div>
+            </div>
+          )}
+          {product.expected_arrival && (
+            <div style={{ flex:1, minWidth:130, background:C.bgDeep, borderRadius:C.rSm, padding:"10px 12px", border:`1px solid ${C.borderLight}` }}>
+              <div style={{ fontSize:10, color:C.faint, letterSpacing:.5, marginBottom:3, fontWeight:600 }}>📦 預計到貨</div>
+              <div style={{ fontSize:13, color:C.text, fontWeight:500 }}>{formatShortDate(product.expected_arrival)}</div>
+            </div>
+          )}
+        </div>
+      )}
       {variantGroups.map(([groupName,options])=>(
         <div key={groupName}>
           <div style={{fontSize:13,fontWeight:500,marginBottom:8,color:C.textMid}}>{groupName}</div>
@@ -477,7 +502,7 @@ function ProductDetailSheet({product,onAdd,onClose,rate}){
   );
 }
 
-function CatalogTab({products,inStock,rate,cart,onAdd,showCart,setShowCart,updateCartQty,removeFromCart,submitOrder}){
+function CatalogTab({products,inStock,rate,cart,onAdd,showCart,setShowCart,updateCartQty,removeFromCart,submitOrder,autoCancelHours=36}){
   const [activeCategory,setActiveCategory]=useState("全部");
   const [search,setSearch]=useState("");
   const [selected,setSelected]=useState(null);
@@ -487,14 +512,21 @@ function CatalogTab({products,inStock,rate,cart,onAdd,showCart,setShowCart,updat
   const [mPrice,setMPrice]=useState("");
   const [payAmount,setPayAmount]=useState("");
   const [payLast5,setPayLast5]=useState("");
+  const [payBank,setPayBank]=useState("");
 
   const doSubmit=()=>{
+    // 驗證匯款資訊必填
+    if (!payBank) { alert("請選擇匯款銀行"); return; }
+    if (!payAmount || Number(payAmount) <= 0) { alert("請填寫匯款金額"); return; }
+    if (!payLast5 || payLast5.length !== 5) { alert("請填寫完整 5 碼帳號末碼"); return; }
     submitOrder({
       payAmount: Number(payAmount) || 0,
       payLast5: payLast5 || "",
+      payBank: payBank || "",
     });
     setPayAmount("");
     setPayLast5("");
+    setPayBank("");
   };
 
   const inCart=id=>cart.find(c=>c.id===id);
@@ -630,24 +662,34 @@ function CatalogTab({products,inStock,rate,cart,onAdd,showCart,setShowCart,updat
                 <div style={{fontSize:20,fontWeight:700,color:C.text}}>{fmtMoney(cart.reduce((s,c)=>s+safePrice(c.price)*safeQty(c.qty),0))}</div>
               </div>
 
-              {/* 付款資訊輸入 */}
+              {/* 付款資訊輸入 (必填) */}
               <div style={{background:C.bgDeep,borderRadius:C.rSm,padding:"14px 16px",marginBottom:12,border:`1px solid ${C.border}`}}>
-                <div style={{fontSize:11,color:C.muted,marginBottom:10,letterSpacing:.5,fontWeight:600}}>💰 匯款資訊(訂金或全額)</div>
+                <div style={{fontSize:11,color:C.muted,marginBottom:10,letterSpacing:.5,fontWeight:600}}>💰 匯款資訊 <span style={{color:C.accent,fontWeight:400}}>(必填)</span></div>
                 <div style={{display:"flex",flexDirection:"column",gap:10}}>
                   <div>
-                    <label style={{fontSize:11,color:C.textMid,display:"block",marginBottom:4}}>匯款金額 NT$</label>
-                    <input type="number" inputMode="numeric" value={payAmount} onChange={e=>setPayAmount(e.target.value)}
-                      placeholder="例如:500"
-                      style={{width:"100%",padding:"9px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:14,boxSizing:"border-box",background:"#fff",color:C.text}}/>
+                    <label style={{fontSize:11,color:C.textMid,display:"block",marginBottom:4}}>付款銀行 *</label>
+                    <select value={payBank} onChange={e=>setPayBank(e.target.value)}
+                      style={{width:"100%",padding:"9px 12px",border:`1px solid ${payBank?C.border:C.accent}`,borderRadius:8,fontSize:14,boxSizing:"border-box",background:"#fff",color:payBank?C.text:C.muted,cursor:"pointer",WebkitAppearance:"none",appearance:"none",backgroundImage:`url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2'><path d='M6 9l6 6 6-6'/></svg>")`,backgroundRepeat:"no-repeat",backgroundPosition:"right 12px center",backgroundSize:"14px",paddingRight:36}}>
+                      <option value="">請選擇銀行</option>
+                      {TW_BANKS.map(b => (
+                        <option key={b.code} value={`${b.code} ${b.name}`}>{b.code} {b.name}</option>
+                      ))}
+                    </select>
                   </div>
                   <div>
-                    <label style={{fontSize:11,color:C.textMid,display:"block",marginBottom:4}}>匯款帳號末 5 碼</label>
+                    <label style={{fontSize:11,color:C.textMid,display:"block",marginBottom:4}}>匯款金額 NT$ *</label>
+                    <input type="number" inputMode="numeric" value={payAmount} onChange={e=>setPayAmount(e.target.value)}
+                      placeholder="例如:500"
+                      style={{width:"100%",padding:"9px 12px",border:`1px solid ${payAmount?C.border:C.accent}`,borderRadius:8,fontSize:14,boxSizing:"border-box",background:"#fff",color:C.text}}/>
+                  </div>
+                  <div>
+                    <label style={{fontSize:11,color:C.textMid,display:"block",marginBottom:4}}>匯款帳號末 5 碼 *</label>
                     <input type="text" inputMode="numeric" maxLength={5} value={payLast5} onChange={e=>setPayLast5(e.target.value.replace(/\D/g,"").slice(0,5))}
                       placeholder="例如:12345"
-                      style={{width:"100%",padding:"9px 12px",border:`1px solid ${C.border}`,borderRadius:8,fontSize:14,boxSizing:"border-box",background:"#fff",color:C.text,letterSpacing:2}}/>
+                      style={{width:"100%",padding:"9px 12px",border:`1px solid ${payLast5.length===5?C.border:C.accent}`,borderRadius:8,fontSize:14,boxSizing:"border-box",background:"#fff",color:C.text,letterSpacing:2}}/>
                   </div>
-                  <div style={{fontSize:10,color:C.faint,lineHeight:1.6,padding:"4px 2px"}}>
-                    填寫後業者較快核對,可先匯訂金或不填(送出後再補)
+                  <div style={{fontSize:10,color:C.accent,lineHeight:1.6,padding:"4px 2px",background:C.accentBg,borderRadius:6,padding:"8px 10px"}}>
+                    ⚠️ 匯款資訊為必填,若下單後 {autoCancelHours} 小時內業者未收到匯款資訊,系統將自動取消訂單。
                   </div>
                 </div>
               </div>
@@ -973,6 +1015,52 @@ function OrdersTab({orders}){
 // ─── 出貨 Tab ─────────────────────────────────────────────────────
 // (賣貨便連結改從 Supabase settings 表讀取)
 
+// 台灣銀行清單(含代號)
+const TW_BANKS = [
+  { code: "004", name: "臺灣銀行" },
+  { code: "005", name: "土地銀行" },
+  { code: "006", name: "合作金庫" },
+  { code: "007", name: "第一銀行" },
+  { code: "008", name: "華南銀行" },
+  { code: "009", name: "彰化銀行" },
+  { code: "011", name: "上海商銀" },
+  { code: "012", name: "台北富邦" },
+  { code: "013", name: "國泰世華" },
+  { code: "016", name: "高雄銀行" },
+  { code: "017", name: "兆豐銀行" },
+  { code: "018", name: "農業金庫" },
+  { code: "021", name: "花旗(台灣)" },
+  { code: "025", name: "首都銀行" },
+  { code: "039", name: "澳盛銀行" },
+  { code: "040", name: "中華開發" },
+  { code: "050", name: "臺灣企銀" },
+  { code: "052", name: "渣打銀行" },
+  { code: "053", name: "台中商銀" },
+  { code: "054", name: "京城銀行" },
+  { code: "081", name: "匯豐(台灣)" },
+  { code: "101", name: "瑞興銀行" },
+  { code: "102", name: "華泰銀行" },
+  { code: "103", name: "臺灣新光商銀" },
+  { code: "108", name: "陽信銀行" },
+  { code: "118", name: "板信銀行" },
+  { code: "147", name: "三信商銀" },
+  { code: "700", name: "中華郵政" },
+  { code: "803", name: "聯邦銀行" },
+  { code: "805", name: "遠東銀行" },
+  { code: "806", name: "元大銀行" },
+  { code: "807", name: "永豐銀行" },
+  { code: "808", name: "玉山銀行" },
+  { code: "809", name: "凱基銀行" },
+  { code: "810", name: "星展(台灣)" },
+  { code: "812", name: "台新銀行" },
+  { code: "815", name: "日盛銀行" },
+  { code: "816", name: "安泰銀行" },
+  { code: "822", name: "中國信託" },
+  { code: "823", name: "將來銀行" },
+  { code: "824", name: "連線銀行(LINE Bank)" },
+  { code: "826", name: "樂天國際銀行" },
+];
+
 function ShipmentsTab({orders, shopeeUrl}){
   const [filter,setFilter]=useState("active"); // active=進行中 / done=已完成
   const canCheckout = s => s === "arrived" || s === "shipped"; // 可結單(顯示賣貨便按鈕)
@@ -1086,6 +1174,7 @@ function MainApp({lineUser,data,setData}){
   const [memberLoaded,setMemberLoaded]=useState(false);
   const [showCart,setShowCart]=useState(false);
   const [shopeeUrl,setShopeeUrl]=useState("");
+  const [autoCancelHours,setAutoCancelHours]=useState(36);
 
   // 個資完整性檢查:四個必填欄位都要有值
   const isProfileComplete=!!(member?.community_name?.trim()&&member?.ig_threads?.trim()&&member?.recipient_name?.trim()&&member?.phone?.trim());
@@ -1109,17 +1198,40 @@ function MainApp({lineUser,data,setData}){
         announcements: annRes.data || d.announcements,
       }));
       console.log(`📊 客人端已載入: 訂單 ${(ordersRes.data||[]).length}, 商品 ${(productsRes.data||[]).length}, 許願 ${(wishlistRes.data||[]).length}`);
+
+      // 檢查逾期未匯款訂單 (使用業者設定的時數,狀態仍在 pending_review 且無匯款資訊)
+      const now = Date.now();
+      const AUTO_CANCEL_MS = autoCancelHours * 60 * 60 * 1000;
+      const expiredOrders = (ordersRes.data || []).filter(o =>
+        o.status === "pending_review" &&
+        !o.deposit_amount &&
+        !o.deposit_last5 &&
+        o.created_at &&
+        (now - new Date(o.created_at).getTime()) > AUTO_CANCEL_MS
+      );
+      if (expiredOrders.length > 0) {
+        console.log(`⏰ 自動取消 ${expiredOrders.length} 筆逾期訂單`);
+        for (const o of expiredOrders) {
+          await supabase.from("orders")
+            .update({ status: "cancelled", updated_at: new Date().toISOString() })
+            .eq("id", o.id);
+        }
+      }
     } catch (e) { console.error("Reload 失敗:", e); }
-  }, [lineUser.userId, setData]);
+  }, [lineUser.userId, setData, autoCancelHours]);
 
   useEffect(()=>{
     injectStyles();
     reloadData(); // 初次載入
     supabase.from("members").select("*").eq("line_user_id",lineUser.userId).single().then(({data:m})=>{setMember(m||{});setMemberLoaded(true);});
-    // 載入賣貨便連結
-    supabase.from("settings").select("*").eq("key","shopee_ship_url").maybeSingle()
-      .then(({data:s})=>{ if(s?.value) setShopeeUrl(s.value); })
-      .catch(()=>{});
+    // 載入賣貨便連結+取消時數
+    Promise.all([
+      supabase.from("settings").select("*").eq("key","shopee_ship_url").maybeSingle(),
+      supabase.from("settings").select("*").eq("key","auto_cancel_hours").maybeSingle(),
+    ]).then(([s1, s2]) => {
+      if(s1.data?.value) setShopeeUrl(s1.data.value);
+      if(s2.data?.value) setAutoCancelHours(Number(s2.data.value) || 36);
+    }).catch(()=>{});
 
     const channel=supabase.channel("realtime-all")
       .on("postgres_changes",{event:"UPDATE",schema:"public",table:"orders",filter:`customer_line_id=eq.${lineUser.userId}`},
@@ -1201,6 +1313,7 @@ function MainApp({lineUser,data,setData}){
       items,total,
       deposit_amount: Number(payInfo.payAmount) || 0,
       deposit_last5: sanitize(payInfo.payLast5 || "", 5),
+      deposit_bank: sanitize(payInfo.payBank || "", 100),
       deposit_paid: (Number(payInfo.payAmount) > 0),
       created_at:new Date().toISOString(),
     };
@@ -1214,7 +1327,7 @@ function MainApp({lineUser,data,setData}){
       console.error(e);
       // 如果 Supabase 還沒有 deposit_* 欄位,fallback 不帶這些欄位重試
       if(e.message&&/deposit_/.test(e.message)){
-        const{deposit_amount,deposit_last5,deposit_paid,...rest}=orderData;
+        const{deposit_amount,deposit_last5,deposit_bank,deposit_paid,...rest}=orderData;
         const{data:saved2,error:e2}=await supabase.from("orders").insert([rest]).select().single();
         if(!e2){
           setData(d=>({...d,orders:[saved2,...d.orders]}));
@@ -1296,7 +1409,7 @@ function MainApp({lineUser,data,setData}){
 
       {/* Content */}
       {tab==="profile"&&<ProfileTab member={member} setMember={setMember} lineUser={lineUser} setToast={setToast}/>}
-      {tab==="catalog"&&<CatalogTab products={data.products} inStock={data.inStock} rate={data.rate} cart={cart} onAdd={addToCart} showCart={showCart} setShowCart={setShowCart} updateCartQty={updateCartQty} removeFromCart={removeFromCart} submitOrder={submitOrder}/>}
+      {tab==="catalog"&&<CatalogTab products={data.products} inStock={data.inStock} rate={data.rate} cart={cart} onAdd={addToCart} showCart={showCart} setShowCart={setShowCart} updateCartQty={updateCartQty} removeFromCart={removeFromCart} submitOrder={submitOrder} autoCancelHours={autoCancelHours}/>}
       {tab==="wishlist"&&<WishlistTab wishes={myWishes} onAddWish={addWish} onDeleteWish={deleteWish} onAddToCart={addToCart} setTab={setTab}/>}
       {tab==="orders"&&<OrdersTab orders={myOrders}/>}
       {tab==="shipments"&&<ShipmentsTab orders={myOrders} shopeeUrl={shopeeUrl}/>}
