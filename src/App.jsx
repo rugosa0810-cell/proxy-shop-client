@@ -549,6 +549,25 @@ function CatalogTab({products,inStock,rate,cart,onAdd,showCart,setShowCart,updat
   const [payLast5,setPayLast5]=useState("");
   const [payBank,setPayBank]=useState("");
 
+  // 從 URL 讀 ?product=xxx 自動打開該商品
+  useEffect(()=>{
+    if (!products || products.length === 0) return;
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const productId = params.get("product");
+      if (productId) {
+        const found = products.find(p => p.id === productId);
+        if (found && found.status === "on") {
+          setSelected(found);
+          // 用完清掉,避免重進 App 又跳出
+          const url = new URL(window.location);
+          url.searchParams.delete("product");
+          window.history.replaceState({}, "", url);
+        }
+      }
+    } catch (e) { console.warn("URL params error:", e); }
+  }, [products]);
+
   const doSubmit=()=>{
     // 驗證匯款資訊必填
     if (!payBank) { alert("請選擇匯款銀行"); return; }
