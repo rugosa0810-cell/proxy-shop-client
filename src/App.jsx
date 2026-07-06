@@ -537,7 +537,7 @@ function ProductDetailSheet({product,onAdd,onClose,rate}){
   );
 }
 
-function CatalogTab({products,inStock,rate,cart,onAdd,showCart,setShowCart,updateCartQty,removeFromCart,submitOrder,autoCancelHours=36}){
+function CatalogTab({products,inStock,rate,cart,onAdd,showCart,setShowCart,updateCartQty,removeFromCart,submitOrder,autoCancelHours=36,memberPhone=""}){
   const [activeCategory,setActiveCategory]=useState("全部");
   const [search,setSearch]=useState("");
   const [selected,setSelected]=useState(null);
@@ -548,6 +548,18 @@ function CatalogTab({products,inStock,rate,cart,onAdd,showCart,setShowCart,updat
   const [payAmount,setPayAmount]=useState("");
   const [payLast5,setPayLast5]=useState("");
   const [payBank,setPayBank]=useState("");
+
+  // 兩步式結帳
+  const [checkoutStep,setCheckoutStep]=useState("cart"); // cart | checkout
+  const [deliveryMethod,setDeliveryMethod]=useState("shopee"); // shopee=賣貨便, meetup=面交, delivery=宅配
+  const [recipientPhone,setRecipientPhone]=useState("");
+
+  // 進結帳頁時,如果客人已有電話就預填
+  useEffect(() => {
+    if (checkoutStep === "checkout" && memberPhone && !recipientPhone) {
+      setRecipientPhone(memberPhone);
+    }
+  }, [checkoutStep, memberPhone]);
 
   // 從 URL 讀 ?product=xxx 自動打開該商品
   useEffect(()=>{
@@ -570,6 +582,7 @@ function CatalogTab({products,inStock,rate,cart,onAdd,showCart,setShowCart,updat
 
   const doSubmit=()=>{
     // 驗證匯款資訊必填
+    if (!recipientPhone || recipientPhone.replace(/\D/g,"").length < 8) { alert("請填寫收件人電話"); return; }
     if (!payBank) { alert("請選擇匯款銀行"); return; }
     if (!payAmount || Number(payAmount) <= 0) { alert("請填寫匯款金額"); return; }
     if (!payLast5 || payLast5.length !== 5) { alert("請填寫完整 5 碼帳號末碼"); return; }
@@ -577,10 +590,14 @@ function CatalogTab({products,inStock,rate,cart,onAdd,showCart,setShowCart,updat
       payAmount: Number(payAmount) || 0,
       payLast5: payLast5 || "",
       payBank: payBank || "",
+      deliveryMethod: deliveryMethod || "shopee",
+      recipientPhone: recipientPhone || "",
     });
     setPayAmount("");
     setPayLast5("");
     setPayBank("");
+    setRecipientPhone("");
+    setCheckoutStep("cart");
   };
 
   const inCart=id=>cart.find(c=>c.id===id);
@@ -677,7 +694,7 @@ function CatalogTab({products,inStock,rate,cart,onAdd,showCart,setShowCart,updat
       </Sheet>
 
       {/* 購物車 Sheet */}
-      <Sheet open={showCart} onClose={()=>setShowCart(false)} title="購物車">
+      <Sheet open={showCart} onClose={()=>{setShowCart(false);setCheckoutStep("cart");}} title={checkoutStep === "checkout" ? "填寫結帳資訊" : "購物車"}>
         <div style={{display:"flex",flexDirection:"column"}}>
           {cart.length===0
             ?<div style={{textAlign:"center",padding:"40px 0",color:C.faint}}>購物車是空的</div>
@@ -780,40 +797,84 @@ function CatalogTab({products,inStock,rate,cart,onAdd,showCart,setShowCart,updat
                 );
               })()}
 
-              {/* 付款資訊輸入 (必填) */}
-              <div style={{background:C.bgDeep,borderRadius:C.rSm,padding:"14px 16px",marginBottom:12,border:`1px solid ${C.border}`}}>
-                <div style={{fontSize:11,color:C.muted,marginBottom:10,letterSpacing:.5,fontWeight:600}}>💰 匯款資訊 <span style={{color:C.accent,fontWeight:400}}>(必填)</span></div>
-                <div style={{display:"flex",flexDirection:"column",gap:10}}>
-                  <div>
-                    <label style={{fontSize:11,color:C.textMid,display:"block",marginBottom:4}}>付款銀行 *</label>
-                    <select value={payBank} onChange={e=>setPayBank(e.target.value)}
-                      style={{width:"100%",padding:"9px 12px",border:`1px solid ${payBank?C.border:C.accent}`,borderRadius:8,fontSize:14,boxSizing:"border-box",background:"#fff",color:payBank?C.text:C.muted,cursor:"pointer",WebkitAppearance:"none",appearance:"none",backgroundImage:`url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2'><path d='M6 9l6 6 6-6'/></svg>")`,backgroundRepeat:"no-repeat",backgroundPosition:"right 12px center",backgroundSize:"14px",paddingRight:36}}>
-                      <option value="">請選擇銀行</option>
-                      {TW_BANKS.map(b => (
-                        <option key={b.code} value={`${b.code} ${b.name}`}>{b.code} {b.name}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label style={{fontSize:11,color:C.textMid,display:"block",marginBottom:4}}>匯款金額 NT$ *</label>
-                    <input type="number" inputMode="numeric" value={payAmount} onChange={e=>setPayAmount(e.target.value)}
-                      placeholder="例如:500"
-                      style={{width:"100%",padding:"9px 12px",border:`1px solid ${payAmount?C.border:C.accent}`,borderRadius:8,fontSize:14,boxSizing:"border-box",background:"#fff",color:C.text}}/>
-                  </div>
-                  <div>
-                    <label style={{fontSize:11,color:C.textMid,display:"block",marginBottom:4}}>匯款帳號末 5 碼 *</label>
-                    <input type="text" inputMode="numeric" maxLength={5} value={payLast5} onChange={e=>setPayLast5(e.target.value.replace(/\D/g,"").slice(0,5))}
-                      placeholder="例如:12345"
-                      style={{width:"100%",padding:"9px 12px",border:`1px solid ${payLast5.length===5?C.border:C.accent}`,borderRadius:8,fontSize:14,boxSizing:"border-box",background:"#fff",color:C.text,letterSpacing:2}}/>
-                  </div>
-                  <div style={{fontSize:10,color:C.accent,lineHeight:1.6,padding:"4px 2px",background:C.accentBg,borderRadius:6,padding:"8px 10px"}}>
-                    ⚠️ 匯款資訊為必填,若下單後 {autoCancelHours} 小時內業者未收到匯款資訊,系統將自動取消訂單。
-                  </div>
-                </div>
-              </div>
+              {checkoutStep === "cart" && (
+                <>
+                  <Btn full onClick={() => setCheckoutStep("checkout")}>下一步:填寫結帳資訊 →</Btn>
+                  <div style={{fontSize:11,color:C.faint,textAlign:"center",marginTop:12,lineHeight:1.8}}>下一步將填寫取貨方式和匯款資訊</div>
+                </>
+              )}
 
-              <Btn full onClick={doSubmit}>確認送出訂單</Btn>
-              <div style={{fontSize:11,color:C.faint,textAlign:"center",marginTop:12,lineHeight:1.8}}>送出後業者確認並與您聯繫<br/>代購最終價格以業者報價為準</div>
+              {checkoutStep === "checkout" && (
+                <>
+                  {/* 取貨方式 */}
+                  <div style={{background:C.bgDeep,borderRadius:C.rSm,padding:"14px 16px",marginBottom:12,border:`1px solid ${C.border}`}}>
+                    <div style={{fontSize:11,color:C.muted,marginBottom:10,letterSpacing:.5,fontWeight:600}}>📦 取貨方式</div>
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                      {[
+                        {v:"shopee",l:"賣貨便"},
+                        {v:"meetup",l:"面交"},
+                        {v:"delivery",l:"宅配"},
+                      ].map(opt => (
+                        <button key={opt.v} onClick={()=>setDeliveryMethod(opt.v)}
+                          style={{flex:1,minWidth:80,padding:"9px 12px",borderRadius:99,border:`1.5px solid ${deliveryMethod===opt.v?C.accent:C.border}`,background:deliveryMethod===opt.v?C.accentBg:"#fff",color:deliveryMethod===opt.v?C.accent:C.textMid,fontSize:13,fontWeight:deliveryMethod===opt.v?600:400,cursor:"pointer"}}>
+                          {opt.l}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* 收件人電話 */}
+                  <div style={{background:C.bgDeep,borderRadius:C.rSm,padding:"14px 16px",marginBottom:12,border:`1px solid ${C.border}`}}>
+                    <div style={{fontSize:11,color:C.muted,marginBottom:8,letterSpacing:.5,fontWeight:600}}>📞 收件人電話 <span style={{color:C.accent,fontWeight:400}}>(必填)</span></div>
+                    <input type="tel" inputMode="tel" value={recipientPhone} onChange={e=>setRecipientPhone(e.target.value.replace(/[^\d\-]/g,""))}
+                      placeholder="例如:0912-345-678"
+                      style={{width:"100%",padding:"9px 12px",border:`1px solid ${recipientPhone.length>=8?C.border:C.accent}`,borderRadius:8,fontSize:14,boxSizing:"border-box",background:"#fff",color:C.text}}/>
+                  </div>
+
+                  {/* 匯款資訊 */}
+                  <div style={{background:C.bgDeep,borderRadius:C.rSm,padding:"14px 16px",marginBottom:12,border:`1px solid ${C.border}`}}>
+                    <div style={{fontSize:11,color:C.muted,marginBottom:10,letterSpacing:.5,fontWeight:600}}>💰 匯款資訊 <span style={{color:C.accent,fontWeight:400}}>(必填)</span></div>
+                    <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                      <div>
+                        <label style={{fontSize:11,color:C.textMid,display:"block",marginBottom:4}}>付款銀行 *</label>
+                        <select value={payBank} onChange={e=>setPayBank(e.target.value)}
+                          style={{width:"100%",padding:"9px 12px",border:`1px solid ${payBank?C.border:C.accent}`,borderRadius:8,fontSize:14,boxSizing:"border-box",background:"#fff",color:payBank?C.text:C.muted,cursor:"pointer",WebkitAppearance:"none",appearance:"none",backgroundImage:`url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2'><path d='M6 9l6 6 6-6'/></svg>")`,backgroundRepeat:"no-repeat",backgroundPosition:"right 12px center",backgroundSize:"14px",paddingRight:36}}>
+                          <option value="">請選擇銀行</option>
+                          {TW_BANKS.map(b => (
+                            <option key={b.code} value={`${b.code} ${b.name}`}>{b.code} {b.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label style={{fontSize:11,color:C.textMid,display:"block",marginBottom:4}}>匯款金額 NT$ *</label>
+                        <input type="number" inputMode="numeric" value={payAmount} onChange={e=>setPayAmount(e.target.value)}
+                          placeholder="例如:500"
+                          style={{width:"100%",padding:"9px 12px",border:`1px solid ${payAmount?C.border:C.accent}`,borderRadius:8,fontSize:14,boxSizing:"border-box",background:"#fff",color:C.text}}/>
+                      </div>
+                      <div>
+                        <label style={{fontSize:11,color:C.textMid,display:"block",marginBottom:4}}>匯款帳號末 5 碼 *</label>
+                        <input type="text" inputMode="numeric" maxLength={5} value={payLast5} onChange={e=>setPayLast5(e.target.value.replace(/\D/g,"").slice(0,5))}
+                          placeholder="例如:12345"
+                          style={{width:"100%",padding:"9px 12px",border:`1px solid ${payLast5.length===5?C.border:C.accent}`,borderRadius:8,fontSize:14,boxSizing:"border-box",background:"#fff",color:C.text,letterSpacing:2}}/>
+                      </div>
+                      <div style={{fontSize:10,color:C.accent,lineHeight:1.6,padding:"8px 10px",background:C.accentBg,borderRadius:6}}>
+                        ⚠️ 若下單後 {autoCancelHours} 小時內業者未收到匯款資訊,系統將自動取消訂單。
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{display:"flex",gap:8}}>
+                    <button onClick={()=>setCheckoutStep("cart")}
+                      style={{flex:1,padding:"12px",border:`1.5px solid ${C.border}`,background:"#fff",color:C.textMid,fontSize:14,borderRadius:12,cursor:"pointer"}}>
+                      ← 返回購物車
+                    </button>
+                    <div style={{flex:2}}>
+                      <Btn full onClick={doSubmit}>確認送出訂單</Btn>
+                    </div>
+                  </div>
+                  <div style={{fontSize:11,color:C.faint,textAlign:"center",marginTop:12,lineHeight:1.8}}>送出後業者確認並與您聯繫<br/>代購最終價格以業者報價為準</div>
+                </>
+              )}
             </>
           }
         </div>
@@ -1444,6 +1505,8 @@ function MainApp({lineUser,data,setData}){
       deposit_last5: sanitize(payInfo.payLast5 || "", 5),
       deposit_bank: sanitize(payInfo.payBank || "", 100),
       deposit_paid: (Number(payInfo.payAmount) > 0),
+      delivery_method: sanitize(payInfo.deliveryMethod || "shopee", 20),
+      recipient_phone: sanitize(payInfo.recipientPhone || "", 20),
       created_at:new Date().toISOString(),
     };
     try{
@@ -1456,7 +1519,7 @@ function MainApp({lineUser,data,setData}){
       console.error(e);
       // 如果 Supabase 還沒有 deposit_* 欄位,fallback 不帶這些欄位重試
       if(e.message&&/deposit_/.test(e.message)){
-        const{deposit_amount,deposit_last5,deposit_bank,deposit_paid,...rest}=orderData;
+        const{deposit_amount,deposit_last5,deposit_bank,deposit_paid,delivery_method,recipient_phone,...rest}=orderData;
         const{data:saved2,error:e2}=await supabase.from("orders").insert([rest]).select().single();
         if(!e2){
           setData(d=>({...d,orders:[saved2,...d.orders]}));
@@ -1538,7 +1601,7 @@ function MainApp({lineUser,data,setData}){
 
       {/* Content */}
       {tab==="profile"&&<ProfileTab member={member} setMember={setMember} lineUser={lineUser} setToast={setToast}/>}
-      {tab==="catalog"&&<CatalogTab products={data.products} inStock={data.inStock} rate={data.rate} cart={cart} onAdd={addToCart} showCart={showCart} setShowCart={setShowCart} updateCartQty={updateCartQty} removeFromCart={removeFromCart} submitOrder={submitOrder} autoCancelHours={autoCancelHours}/>}
+      {tab==="catalog"&&<CatalogTab products={data.products} inStock={data.inStock} rate={data.rate} cart={cart} onAdd={addToCart} showCart={showCart} setShowCart={setShowCart} updateCartQty={updateCartQty} removeFromCart={removeFromCart} submitOrder={submitOrder} autoCancelHours={autoCancelHours} memberPhone={member?.phone||""}/>}
       {tab==="wishlist"&&<WishlistTab wishes={myWishes} onAddWish={addWish} onDeleteWish={deleteWish} onAddToCart={addToCart} setTab={setTab}/>}
       {tab==="orders"&&<OrdersTab orders={myOrders}/>}
       {tab==="shipments"&&<ShipmentsTab orders={myOrders} shopeeUrl={shopeeUrl}/>}
