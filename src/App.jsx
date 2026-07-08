@@ -553,6 +553,7 @@ function CatalogTab({products,inStock,rate,cart,onAdd,showCart,setShowCart,updat
   const [checkoutStep,setCheckoutStep]=useState("cart"); // cart | checkout
   const [deliveryMethod,setDeliveryMethod]=useState("shopee"); // shopee=賣貨便, meetup=面交, delivery=宅配
   const [recipientPhone,setRecipientPhone]=useState("");
+  const [selectedStore,setSelectedStore]=useState(null); // {code, name, address}
 
   // 進結帳頁時,如果客人已有電話就預填
   useEffect(() => {
@@ -560,6 +561,59 @@ function CatalogTab({products,inStock,rate,cart,onAdd,showCart,setShowCart,updat
       setRecipientPhone(memberPhone);
     }
   }, [checkoutStep, memberPhone]);
+
+  // 從 URL 讀取 EMap 選門市回傳的參數
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      // 7-11 賣貨便 EMap 回傳參數(可能大寫或小寫)
+      const stCode = params.get("stCode") || params.get("storeid") || params.get("CVSStoreID");
+      const stName = params.get("stName") || params.get("storename") || params.get("CVSStoreName");
+      const stAddr = params.get("stAddr") || params.get("storeaddress") || params.get("CVSAddress");
+      if (stCode && stName) {
+        setSelectedStore({
+          code: stCode,
+          name: decodeURIComponent(stName),
+          address: stAddr ? decodeURIComponent(stAddr) : "",
+        });
+        // 恢復表單狀態
+        try {
+          const saved = sessionStorage.getItem("checkoutState");
+          if (saved) {
+            const s = JSON.parse(saved);
+            if (s.payBank) setPayBank(s.payBank);
+            if (s.payAmount) setPayAmount(s.payAmount);
+            if (s.payLast5) setPayLast5(s.payLast5);
+            if (s.recipientPhone) setRecipientPhone(s.recipientPhone);
+            if (s.deliveryMethod) setDeliveryMethod(s.deliveryMethod);
+            sessionStorage.removeItem("checkoutState");
+          }
+        } catch (e) { console.warn("恢復表單失敗:", e); }
+        setShowCart(true);
+        setCheckoutStep("checkout");
+        // 清掉 URL 參數,避免重進又跳出
+        const url = new URL(window.location);
+        ["stCode","stName","stAddr","storeid","storename","storeaddress","CVSStoreID","CVSStoreName","CVSAddress"].forEach(k=>url.searchParams.delete(k));
+        window.history.replaceState({}, "", url);
+      }
+    } catch (e) { console.warn("解析 EMap 回傳失敗:", e); }
+  }, []);
+
+  // 開啟 EMap 選門市
+  const openEMap = () => {
+    // 先儲存目前表單狀態
+    try {
+      sessionStorage.setItem("checkoutState", JSON.stringify({
+        payBank, payAmount, payLast5, recipientPhone, deliveryMethod,
+      }));
+    } catch (e) { console.warn("儲存表單失敗:", e); }
+
+    // 建立回傳網址(當前頁面)
+    const returnUrl = window.location.origin + window.location.pathname;
+    // 7-11 賣貨便 EMap 公用版本
+    const emapUrl = `https://emap.presco.com.tw/c2cemap.ashx?eshopid=870&servicetype=1&url=${encodeURIComponent(returnUrl)}`;
+    window.location.href = emapUrl;
+  };
 
   // 從 URL 讀 ?product=xxx 自動打開該商品
   useEffect(()=>{
@@ -581,6 +635,8 @@ function CatalogTab({products,inStock,rate,cart,onAdd,showCart,setShowCart,updat
   }, [products]);
 
   const doSubmit=()=>{
+    // 驗證取貨方式細節
+    if (deliveryMethod === "shopee" && !selectedStore) { alert("請選擇 7-11 取貨門市"); return; }
     // 驗證匯款資訊必填
     if (!recipientPhone || recipientPhone.replace(/\D/g,"").length < 8) { alert("請填寫收件人電話"); return; }
     if (!payBank) { alert("請選擇匯款銀行"); return; }
@@ -592,11 +648,15 @@ function CatalogTab({products,inStock,rate,cart,onAdd,showCart,setShowCart,updat
       payBank: payBank || "",
       deliveryMethod: deliveryMethod || "shopee",
       recipientPhone: recipientPhone || "",
+      storeCode: selectedStore?.code || "",
+      storeName: selectedStore?.name || "",
+      storeAddress: selectedStore?.address || "",
     });
     setPayAmount("");
     setPayLast5("");
     setPayBank("");
     setRecipientPhone("");
+    setSelectedStore(null);
     setCheckoutStep("cart");
   };
 
@@ -809,7 +869,7 @@ function CatalogTab({products,inStock,rate,cart,onAdd,showCart,setShowCart,updat
                   {/* 取貨方式 */}
                   <div style={{background:C.bgDeep,borderRadius:C.rSm,padding:"14px 16px",marginBottom:12,border:`1px solid ${C.border}`}}>
                     <div style={{fontSize:11,color:C.muted,marginBottom:10,letterSpacing:.5,fontWeight:600}}>📦 取貨方式</div>
-                    <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:deliveryMethod==="shopee"?12:0}}>
                       {[
                         {v:"shopee",l:"賣貨便"},
                         {v:"meetup",l:"面交"},
@@ -821,6 +881,39 @@ function CatalogTab({products,inStock,rate,cart,onAdd,showCart,setShowCart,updat
                         </button>
                       ))}
                     </div>
+                    {/* 賣貨便:選門市 */}
+                    {deliveryMethod === "shopee" && (
+                      <>
+                        {selectedStore ? (
+                          <div style={{background:"#fff",borderRadius:8,padding:"10px 12px",border:`1px solid ${C.border}`}}>
+                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+                              <div style={{flex:1,minWidth:0}}>
+                                <div style={{fontSize:11,color:C.muted,marginBottom:3}}>已選擇取貨門市</div>
+                                <div style={{fontSize:13,fontWeight:600,color:C.accentDark}}>
+                                  🏪 {selectedStore.name}
+                                  <span style={{fontSize:10,color:C.muted,marginLeft:6,fontWeight:400}}>#{selectedStore.code}</span>
+                                </div>
+                                {selectedStore.address && (
+                                  <div style={{fontSize:11,color:C.muted,marginTop:3,lineHeight:1.4}}>{selectedStore.address}</div>
+                                )}
+                              </div>
+                              <button onClick={openEMap}
+                                style={{background:"transparent",color:C.accent,border:`1px solid ${C.accent}`,padding:"5px 10px",borderRadius:6,fontSize:11,fontWeight:500,cursor:"pointer",flexShrink:0}}>
+                                重選
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button onClick={openEMap}
+                            style={{width:"100%",background:C.accent,color:"#fff",border:"none",padding:"10px",borderRadius:8,fontSize:13,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
+                            🗺 選擇 7-11 取貨門市
+                          </button>
+                        )}
+                        <div style={{fontSize:10,color:C.muted,marginTop:6,lineHeight:1.6}}>
+                          點選後將跳轉至統一超商門市地圖,選好門市自動跳回
+                        </div>
+                      </>
+                    )}
                   </div>
 
                   {/* 收件人電話 */}
@@ -1507,6 +1600,9 @@ function MainApp({lineUser,data,setData}){
       deposit_paid: (Number(payInfo.payAmount) > 0),
       delivery_method: sanitize(payInfo.deliveryMethod || "shopee", 20),
       recipient_phone: sanitize(payInfo.recipientPhone || "", 20),
+      store_code: sanitize(payInfo.storeCode || "", 30),
+      store_name: sanitize(payInfo.storeName || "", 100),
+      store_address: sanitize(payInfo.storeAddress || "", 200),
       created_at:new Date().toISOString(),
     };
     try{
@@ -1519,7 +1615,7 @@ function MainApp({lineUser,data,setData}){
       console.error(e);
       // 如果 Supabase 還沒有 deposit_* 欄位,fallback 不帶這些欄位重試
       if(e.message&&/deposit_/.test(e.message)){
-        const{deposit_amount,deposit_last5,deposit_bank,deposit_paid,delivery_method,recipient_phone,...rest}=orderData;
+        const{deposit_amount,deposit_last5,deposit_bank,deposit_paid,delivery_method,recipient_phone,store_code,store_name,store_address,...rest}=orderData;
         const{data:saved2,error:e2}=await supabase.from("orders").insert([rest]).select().single();
         if(!e2){
           setData(d=>({...d,orders:[saved2,...d.orders]}));
