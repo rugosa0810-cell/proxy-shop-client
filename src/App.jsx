@@ -608,8 +608,8 @@ function CatalogTab({products,inStock,rate,cart,onAdd,showCart,setShowCart,updat
       }));
     } catch (e) { console.warn("儲存表單失敗:", e); }
 
-    // 建立回傳網址(當前頁面)
-    const returnUrl = window.location.origin + window.location.pathname;
+    // 建立回傳網址(用 API endpoint 接收 POST,轉成 GET redirect)
+    const returnUrl = window.location.origin + "/api/store-callback";
     // 7-11 賣貨便 EMap 公用版本
     const emapUrl = `https://emap.presco.com.tw/c2cemap.ashx?eshopid=870&servicetype=1&url=${encodeURIComponent(returnUrl)}`;
     window.location.href = emapUrl;
