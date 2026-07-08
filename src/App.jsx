@@ -1440,13 +1440,28 @@ function ShipmentsTab({orders, shopeeUrl}){
 // ─── Main App ─────────────────────────────────────────────────────
 function MainApp({lineUser,data,setData}){
   const [tab,setTab]=useState("catalog");
-  const [cart,setCart]=useState([]);
+  // 購物車:從 localStorage 恢復(避免跳 EMap 選門市後遺失)
+  const [cart,setCart]=useState(() => {
+    try {
+      const saved = localStorage.getItem(`cart_${lineUser?.userId||""}`);
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) { return []; }
+  });
   const [toast,setToast]=useState(null);
   const [member,setMember]=useState(null); // null=未載入, {}=載完但沒資料
   const [memberLoaded,setMemberLoaded]=useState(false);
   const [showCart,setShowCart]=useState(false);
   const [shopeeUrl,setShopeeUrl]=useState("");
   const [autoCancelHours,setAutoCancelHours]=useState(36);
+
+  // 購物車改變時自動存 localStorage
+  useEffect(() => {
+    try {
+      if (lineUser?.userId) {
+        localStorage.setItem(`cart_${lineUser.userId}`, JSON.stringify(cart));
+      }
+    } catch (e) { console.warn("儲存購物車失敗:", e); }
+  }, [cart, lineUser?.userId]);
 
   // 個資完整性檢查:四個必填欄位都要有值
   const isProfileComplete=!!(member?.community_name?.trim()&&member?.ig_threads?.trim()&&member?.recipient_name?.trim()&&member?.phone?.trim());
