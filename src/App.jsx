@@ -389,7 +389,7 @@ function ProfileTab({member,setMember,lineUser,setToast,forced=false}){
 }
 
 // ─── 商品 Tab ─────────────────────────────────────────────────────
-function ProductDetailSheet({product,onAdd,onClose,rate}){
+function ProductDetailSheet({product,onAdd,onClose,rate,isWholesale=false}){
   const [selVariants,setSelVariants]=useState({});
   const [qty,setQty]=useState(1);
   if(!product)return null;
@@ -407,7 +407,12 @@ function ProductDetailSheet({product,onAdd,onClose,rate}){
   })();
   // 預設顯示:款式最低售價(讓客人一打開就看到價格)
   // 選了款式後:顯示被選中款式的售價
-  const variantPrices=(product.variants||[]).map(v=>Number(v.price)||0).filter(x=>x>0);
+  // 批發客用批發價(如有),沒有就用零售價
+  const getEffectivePrice = (v) => {
+    if (isWholesale && Number(v.wholesale_price) > 0) return Number(v.wholesale_price);
+    return Number(v.price) || 0;
+  };
+  const variantPrices=(product.variants||[]).map(v=>getEffectivePrice(v)).filter(x=>x>0);
   const minPrice=variantPrices.length?Math.min(...variantPrices):0;
   const maxPrice=variantPrices.length?Math.max(...variantPrices):0;
   const hasRange=variantPrices.length>1&&maxPrice>minPrice;
@@ -420,8 +425,7 @@ function ProductDetailSheet({product,onAdd,onClose,rate}){
       return group?.[1]?.find(o=>o.label===label);
     }).filter(Boolean);
     if(selectedOpts.length>0){
-      // 有選款式:顯示該款式的售價和訂金
-      twdPrice=Math.max(...selectedOpts.map(o=>Number(o.price)||0));
+      twdPrice=Math.max(...selectedOpts.map(o=>getEffectivePrice(o)));
       selectedDeposit=Math.max(...selectedOpts.map(o=>Number(o.deposit_amount)||0));
     }
   }
@@ -537,7 +541,7 @@ function ProductDetailSheet({product,onAdd,onClose,rate}){
   );
 }
 
-function CatalogTab({products,inStock,rate,cart,onAdd,showCart,setShowCart,updateCartQty,removeFromCart,submitOrder,autoCancelHours=36,memberPhone=""}){
+function CatalogTab({products,inStock,rate,cart,onAdd,showCart,setShowCart,updateCartQty,removeFromCart,submitOrder,autoCancelHours=36,memberPhone="",isWholesale=false,wholesaleNo=""}){
   const [activeCategory,setActiveCategory]=useState("全部");
   const [search,setSearch]=useState("");
   const [selected,setSelected]=useState(null);
@@ -668,8 +672,9 @@ function CatalogTab({products,inStock,rate,cart,onAdd,showCart,setShowCart,updat
 
   const ProductCard=({p,isInStock,idx})=>{
     const qtyInCart=inCart(p.id)?.qty;
-    // 取所有款式售價中的最小值(沒款式或都 0 則為 0)
-    const variantPrices=(p.variants||[]).map(v=>Number(v.price)||0).filter(x=>x>0);
+    // 批發客用批發價,一般客用零售價
+    const getPrice = v => (isWholesale && Number(v.wholesale_price) > 0) ? Number(v.wholesale_price) : (Number(v.price) || 0);
+    const variantPrices=(p.variants||[]).map(v=>getPrice(v)).filter(x=>x>0);
     const minPrice=variantPrices.length?Math.min(...variantPrices):0;
     const hasMultiple=variantPrices.length>1&&Math.max(...variantPrices)>minPrice;
     return(
@@ -690,6 +695,17 @@ function CatalogTab({products,inStock,rate,cart,onAdd,showCart,setShowCart,updat
 
   return(
     <div style={{padding:"16px 16px 100px",display:"flex",flexDirection:"column",gap:16}}>
+      {/* 批發客橫幅 */}
+      {isWholesale && (
+        <div style={{background:`linear-gradient(135deg, ${C.pinkBg} 0%, ${C.accentBg} 100%)`,border:`1.5px solid ${C.pinkDark}`,borderRadius:12,padding:"12px 14px",display:"flex",alignItems:"center",gap:10}}>
+          <div style={{fontSize:24}}>💎</div>
+          <div style={{flex:1}}>
+            <div style={{fontSize:13,fontWeight:700,color:C.pinkDark}}>批發客專屬</div>
+            <div style={{fontSize:11,color:C.textMid,marginTop:1}}>會員編號 <span style={{fontWeight:600,fontFamily:"monospace"}}>{wholesaleNo}</span> · 商品已顯示批發價</div>
+          </div>
+        </div>
+      )}
+
       {/* 搜尋 */}
       <div style={{position:"relative"}}>
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="搜尋商品..."
@@ -747,10 +763,10 @@ function CatalogTab({products,inStock,rate,cart,onAdd,showCart,setShowCart,updat
 
       {/* Product Sheets */}
       <Sheet open={!!selected} onClose={()=>setSelected(null)} title={selected?sanitize(selected.name):""}>
-        {selected&&<ProductDetailSheet product={selected} onAdd={onAdd} onClose={()=>setSelected(null)} rate={rate}/>}
+        {selected&&<ProductDetailSheet product={selected} onAdd={onAdd} onClose={()=>setSelected(null)} rate={rate} isWholesale={isWholesale}/>}
       </Sheet>
       <Sheet open={!!selectedInStock} onClose={()=>setSelectedInStock(null)} title={selectedInStock?sanitize(selectedInStock.name):""}>
-        {selectedInStock&&<ProductDetailSheet product={selectedInStock} onAdd={onAdd} onClose={()=>setSelectedInStock(null)} rate={rate}/>}
+        {selectedInStock&&<ProductDetailSheet product={selectedInStock} onAdd={onAdd} onClose={()=>setSelectedInStock(null)} rate={rate} isWholesale={isWholesale}/>}
       </Sheet>
 
       {/* 購物車 Sheet */}
@@ -1712,7 +1728,7 @@ function MainApp({lineUser,data,setData}){
 
       {/* Content */}
       {tab==="profile"&&<ProfileTab member={member} setMember={setMember} lineUser={lineUser} setToast={setToast}/>}
-      {tab==="catalog"&&<CatalogTab products={data.products} inStock={data.inStock} rate={data.rate} cart={cart} onAdd={addToCart} showCart={showCart} setShowCart={setShowCart} updateCartQty={updateCartQty} removeFromCart={removeFromCart} submitOrder={submitOrder} autoCancelHours={autoCancelHours} memberPhone={member?.phone||""}/>}
+      {tab==="catalog"&&<CatalogTab products={data.products} inStock={data.inStock} rate={data.rate} cart={cart} onAdd={addToCart} showCart={showCart} setShowCart={setShowCart} updateCartQty={updateCartQty} removeFromCart={removeFromCart} submitOrder={submitOrder} autoCancelHours={autoCancelHours} memberPhone={member?.phone||""} isWholesale={!!member?.is_wholesale} wholesaleNo={member?.wholesale_no||""}/>}
       {tab==="wishlist"&&<WishlistTab wishes={myWishes} onAddWish={addWish} onDeleteWish={deleteWish} onAddToCart={addToCart} setTab={setTab}/>}
       {tab==="orders"&&<OrdersTab orders={myOrders}/>}
       {tab==="shipments"&&<ShipmentsTab orders={myOrders} shopeeUrl={shopeeUrl}/>}
