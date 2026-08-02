@@ -22,6 +22,9 @@ const supabase = createClient(
 );
 
 const CUSTOMER_LIFF_URL = "https://liff.line.me/2009872512-JJAaJ7Bi";
+
+// 機器人設定者 —— 只有這個 LINE 用戶 ID 可以下「報價」等管理指令
+const OWNER_LINE_USER_ID = "U0b1a787b6b6d9e8320ef96181901028f";
 const CONTACT_TEXT = "若持續有問題,請直接留言告訴我們商品名稱和數量,我們會盡快協助您 🙏";
 
 // ── 基礎工具 ──────────────────────────────────────────────
@@ -51,6 +54,23 @@ async function replyMessage(replyToken, messages) {
   if (!res.ok) {
     const errText = await res.text();
     console.error("LINE reply API error:", res.status, errText);
+  }
+  return res;
+}
+
+// 主動推播訊息(不需要 replyToken,用於通知業者/客人)
+async function pushMessage(to, messages) {
+  const res = await fetch("https://api.line.me/v2/bot/message/push", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`,
+    },
+    body: JSON.stringify({ to, messages }),
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    console.error("LINE push API error:", res.status, errText);
   }
   return res;
 }
@@ -283,10 +303,227 @@ function buildBindMemberFlex() {
   };
 }
 
+// 5. 圖片許願建立成功卡片
+function buildWishCreatedFlex(imageUrl) {
+  const bubble = {
+    type: "bubble",
+    body: {
+      type: "box",
+      layout: "vertical",
+      spacing: "md",
+      contents: [
+        { type: "text", text: "✅ 已建立許願", weight: "bold", size: "lg", color: "#a8847e" },
+        { type: "text", text: "我們會盡快為您報價,報價後可直接於「許願清單」加入購物車下單", size: "sm", color: "#888888", wrap: true },
+      ],
+    },
+  };
+  if (validImageUrl(imageUrl)) {
+    bubble.hero = { type: "image", url: imageUrl, size: "full", aspectRatio: "20:13", aspectMode: "cover" };
+  }
+  return { type: "flex", altText: "已建立許願", contents: bubble };
+}
+
+// 6. 通知業者(Owner)有新的圖片許願待報價
+function buildOwnerNotifyFlex({ customerName, imageUrl }) {
+  const bubble = {
+    type: "bubble",
+    body: {
+      type: "box",
+      layout: "vertical",
+      spacing: "md",
+      contents: [
+        { type: "text", text: "📥 新的許願待報價", weight: "bold", size: "lg", color: "#a8847e" },
+        { type: "text", text: `客人:${customerName}`, size: "sm", color: "#888888" },
+        { type: "separator", margin: "md" },
+        { type: "text", text: "回覆「報價 850」即可完成設定,客人會立即收到通知並可下單", size: "sm", wrap: true, margin: "md" },
+      ],
+    },
+  };
+  if (validImageUrl(imageUrl)) {
+    bubble.hero = { type: "image", url: imageUrl, size: "full", aspectRatio: "20:13", aspectMode: "cover" };
+  }
+  return { type: "flex", altText: `新的許願待報價 · ${customerName}`, contents: bubble };
+}
+
+// 下載 LINE 傳來的圖片(回傳 Buffer)
+async function fetchLineImage(messageId) {
+  const res = await fetch(`https://api-data.line.me/v2/bot/message/${messageId}/content`, {
+    headers: { Authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}` },
+  });
+  if (!res.ok) throw new Error(`下載圖片失敗:${res.status}`);
+  const arrayBuffer = await res.arrayBuffer();
+  return Buffer.from(arrayBuffer);
+}
+
+// ── 處理客人傳圖片:下載後暫存,等待接續的 +1 ──────────────
+async function handleImageMessage(event) {
+  const lineUserId = event.source.userId;
+  try {
+    const buffer = await fetchLineImage(event.message.id);
+    const fileName = `wish_${Date.now()}_${secureUid()}.jpg`;
+    const { error: upErr } = await supabase.storage
+      .from("product-images")
+      .upload(fileName, buffer, { contentType: "image/jpeg", upsert: false });
+    if (upErr) throw upErr;
+
+    const { data: urlData } = supabase.storage.from("product-images").getPublicUrl(fileName);
+
+    await supabase.from("pending_images").upsert(
+      [{ line_user_id: lineUserId, image_url: urlData.publicUrl, created_at: new Date().toISOString() }],
+      { onConflict: "line_user_id" }
+    );
+    // 圖片先靜默暫存,不主動回覆,避免干擾;等客人打 +1 才回應
+  } catch (err) {
+    console.error("處理圖片失敗:", err);
+  }
+}
+
+// ── 處理裸「+1」:把剛才暫存的圖片變成許願清單項目 ──────────
+const PENDING_IMAGE_TTL_MS = 10 * 60 * 1000; // 10 分鐘內有效
+
+async function handleBarePlusOne(event) {
+  const replyToken = event.replyToken;
+  const lineUserId = event.source.userId;
+
+  const { data: member } = await supabase
+    .from("members")
+    .select("*")
+    .eq("line_user_id", lineUserId)
+    .maybeSingle();
+
+  if (!member) {
+    await replyMessage(replyToken, [buildBindMemberFlex()]);
+    return;
+  }
+
+  const { data: pending } = await supabase
+    .from("pending_images")
+    .select("*")
+    .eq("line_user_id", lineUserId)
+    .maybeSingle();
+
+  if (!pending) {
+    await replyMessage(replyToken, [
+      { type: "text", text: `請先傳一張圖片,再打 +1 快速建立賣場 📷\n\n${CONTACT_TEXT}` },
+    ]);
+    return;
+  }
+
+  const ageMs = Date.now() - new Date(pending.created_at).getTime();
+  await supabase.from("pending_images").delete().eq("line_user_id", lineUserId);
+
+  if (ageMs > PENDING_IMAGE_TTL_MS) {
+    await replyMessage(replyToken, [
+      { type: "text", text: `圖片已逾時失效(超過 10 分鐘),請重新傳一次圖片再打 +1 📷` },
+    ]);
+    return;
+  }
+
+  const wishData = {
+    id: secureUid(),
+    customer_line_id: lineUserId,
+    customer_name: member.community_name || member.line_name || member.name || "LINE 客人",
+    name: "客人傳圖許願",
+    note: "透過 LINE Bot 傳圖 +1 建立",
+    img_url: pending.image_url,
+    link: "",
+    status: "searching",
+    created_at: new Date().toISOString(),
+  };
+
+  const { error } = await supabase.from("wishlist").insert([wishData]);
+
+  if (error) {
+    console.error("建立許願失敗:", error);
+    await replyMessage(replyToken, [
+      { type: "text", text: `建立失敗,請稍後再試一次 🙏\n\n${CONTACT_TEXT}` },
+    ]);
+    return;
+  }
+
+  // 建立「待報價」紀錄,並推播通知業者(機器人設定者)
+  try {
+    await supabase.from("pending_quotes").insert([
+      {
+        id: secureUid(),
+        wish_id: wishData.id,
+        customer_line_id: lineUserId,
+        customer_name: wishData.customer_name,
+        image_url: pending.image_url,
+        quoted: false,
+        created_at: new Date().toISOString(),
+      },
+    ]);
+    await pushMessage(OWNER_LINE_USER_ID, [
+      buildOwnerNotifyFlex({ customerName: wishData.customer_name, imageUrl: pending.image_url }),
+    ]);
+  } catch (err) {
+    console.error("通知業者失敗:", err);
+  }
+
+  await replyMessage(replyToken, [buildWishCreatedFlex(pending.image_url)]);
+}
+
+// ── 業者報價指令:「報價 850」或「報價 850 東京限定娃娃」 ──────────
+// 只有 OWNER_LINE_USER_ID 可以下這個指令,依先來後到套用到最舊一筆待報價項目
+function parseQuoteCommand(text) {
+  const m = text.trim().match(/^報價\s*(\d+)(?:\s+(.+))?$/);
+  if (!m) return null;
+  const price = parseInt(m[1], 10);
+  if (!price || price <= 0) return null;
+  return { price, note: (m[2] || "").trim() };
+}
+
+async function handleOwnerQuote(event, quote) {
+  const replyToken = event.replyToken;
+
+  const { data: pendingQuote } = await supabase
+    .from("pending_quotes")
+    .select("*")
+    .eq("quoted", false)
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (!pendingQuote) {
+    await replyMessage(replyToken, [{ type: "text", text: "目前沒有待報價的許願項目 📭" }]);
+    return;
+  }
+
+  const updatePatch = { status: "found", price: quote.price };
+  if (quote.note) updatePatch.found_note = quote.note;
+
+  const { error } = await supabase.from("wishlist").update(updatePatch).eq("id", pendingQuote.wish_id);
+  if (error) {
+    console.error("報價寫入失敗:", error);
+    await replyMessage(replyToken, [{ type: "text", text: `報價失敗:${error.message}` }]);
+    return;
+  }
+
+  await supabase.from("pending_quotes").update({ quoted: true }).eq("id", pendingQuote.id);
+
+  await replyMessage(replyToken, [
+    { type: "text", text: `✅ 已為「${pendingQuote.customer_name}」報價 NT$${quote.price}${quote.note ? `\n備註:${quote.note}` : ""}` },
+  ]);
+
+  // 通知客人:報價已完成,可去下單
+  try {
+    await pushMessage(pendingQuote.customer_line_id, [
+      {
+        type: "text",
+        text: `🎉 您的許願已完成報價:NT$${quote.price}\n請至「許願清單」查看並加入購物車下單哦!`,
+      },
+    ]);
+  } catch (err) {
+    console.error("通知客人失敗:", err);
+  }
+}
+
 // ── 主流程:處理 +1 建單 ─────────────────────────────────
 async function handlePlusOne(event, cmd) {
   const replyToken = event.replyToken;
   const lineUserId = event.source.userId;
+
 
   // 1. 確認客人已綁定會員
   const { data: member } = await supabase
@@ -399,10 +636,51 @@ export default async function handler(req, res) {
     const events = body.events || [];
 
     for (const event of events) {
-      if (event.type !== "message" || event.message.type !== "text") continue;
+      if (event.type !== "message") continue;
+
+      // 圖片訊息:先暫存,等待接續的 +1
+      if (event.message.type === "image") {
+        try {
+          await handleImageMessage(event);
+        } catch (err) {
+          console.error("handleImageMessage 錯誤:", err);
+        }
+        continue;
+      }
+
+      if (event.message.type !== "text") continue;
 
       const userText = event.message.text;
       const replyToken = event.replyToken;
+      const trimmed = userText.trim();
+
+      // 業者(機器人設定者)下報價指令 —— 只有 OWNER_LINE_USER_ID 才會被處理
+      if (event.source.userId === OWNER_LINE_USER_ID) {
+        const quote = parseQuoteCommand(trimmed);
+        if (quote) {
+          try {
+            await handleOwnerQuote(event, quote);
+          } catch (err) {
+            console.error("handleOwnerQuote 錯誤:", err);
+            await replyMessage(replyToken, [{ type: "text", text: "報價處理時發生錯誤,請稍後再試" }]);
+          }
+          continue;
+        }
+      }
+
+      // 裸 +1(前面沒帶商品名稱/編號)→ 檢查是否有剛傳的圖片,建立許願清單
+      if (trimmed === "+1") {
+        try {
+          await handleBarePlusOne(event);
+        } catch (err) {
+          console.error("handleBarePlusOne 錯誤:", err);
+          await replyMessage(replyToken, [
+            { type: "text", text: `處理時發生錯誤,請稍後再試 🙏\n\n${CONTACT_TEXT}` },
+          ]);
+        }
+        continue;
+      }
+
       const cmd = parsePlusOneCommand(userText);
 
       if (cmd) {
