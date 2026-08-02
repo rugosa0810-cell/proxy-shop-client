@@ -414,9 +414,8 @@ export default async function handler(req, res) {
             { type: "text", text: `處理訂單時發生錯誤,請稍後再試 🙏\n\n${CONTACT_TEXT}` },
           ]);
         }
-      } else {
-        await replyMessage(replyToken, [{ type: "text", text: `收到:${userText}` }]);
       }
+      // 非 +1 建單指令 → Bot 不回應,交由業者人工回覆(避免每句話都被 Bot 洗版)
     }
 
     res.status(200).json({ ok: true });
