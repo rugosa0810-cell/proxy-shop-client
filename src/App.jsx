@@ -59,6 +59,10 @@ const safeQty = n => { const v=parseInt(n,10); return Number.isFinite(v)&&v>=1&&
 const safePrice = n => { const v=Number(n); return Number.isFinite(v)&&v>=0?Math.round(v*100)/100:0; };
 const secureOrderNo = () => { const a=new Uint32Array(1); crypto.getRandomValues(a); return String(100000+(a[0]%900000)); };
 const fmtMoney = n => `NT$ ${Number(n||0).toLocaleString()}`;
+const hashPassword = async (pw) => {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(pw));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
+};
 const formatShortDate = d => {
   if (!d) return "";
   try {
@@ -307,6 +311,217 @@ function LineLogin({onSuccess}){
 }
 
 // ─── 個人資料 Tab ─────────────────────────────────────────────────
+// 帳號註冊/登入頁面
+function AuthPage({ lineUser, onSuccess, setToast }) {
+  const [mode, setMode] = useState("login"); // login | register
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPw, setConfirmPw] = useState("");
+  // 註冊時的個資
+  const [communityName, setCommunityName] = useState("");
+  const [recipientName, setRecipientName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [sevenStore, setSevenStore] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const doRegister = async () => {
+    const u = sanitize(username, 30);
+    if (!u || u.length < 3) { alert("帳號至少 3 個字元"); return; }
+    if (!password || password.length < 6) { alert("密碼至少 6 個字元"); return; }
+    if (password !== confirmPw) { alert("兩次密碼不一致"); return; }
+    if (!sanitize(communityName)) { alert("請填寫社群名稱"); return; }
+    if (!sanitize(recipientName)) { alert("請填寫收件人姓名"); return; }
+    const phoneClean = phone.replace(/\D/g, "");
+    if (phoneClean.length < 8) { alert("請填寫正確的電話號碼"); return; }
+
+    setLoading(true);
+    try {
+      // 檢查帳號是否已存在
+      const { data: existing } = await supabase.from("members").select("id").eq("username", u).maybeSingle();
+      if (existing) { alert("此帳號已被使用,請換一個"); setLoading(false); return; }
+
+      // 檢查此 LINE 是否已綁定過其他帳號
+      const { data: lineExisting } = await supabase.from("members").select("id, username").eq("line_user_id", lineUser.userId).maybeSingle();
+      if (lineExisting?.username) {
+        alert(`此 LINE 已綁定帳號「${lineExisting.username}」,請直接登入`);
+        setMode("login");
+        setUsername(lineExisting.username);
+        setLoading(false);
+        return;
+      }
+
+      const passwordHash = await hashPassword(password);
+      const memberData = {
+        id: secureUid(),
+        line_user_id: lineUser.userId,
+        line_name: lineUser.name,
+        username: u,
+        password_hash: passwordHash,
+        community_name: sanitize(communityName, 50),
+        recipient_name: sanitize(recipientName, 50),
+        phone: sanitize(phoneClean, 20),
+        seven_store: sanitize(sevenStore, 100),
+        ig_threads: sanitize(communityName, 50), // 兼容舊欄位
+        created_at: new Date().toISOString(),
+      };
+
+      // 若之前 LINE 已有 member 記錄(沒帳號的舊資料)→ update
+      if (lineExisting) {
+        const { error } = await supabase.from("members").update({
+          username: u, password_hash: passwordHash,
+          community_name: memberData.community_name,
+          recipient_name: memberData.recipient_name,
+          phone: memberData.phone,
+          seven_store: memberData.seven_store,
+          ig_threads: memberData.ig_threads,
+        }).eq("id", lineExisting.id);
+        if (error) { alert(`註冊失敗:${error.message}`); setLoading(false); return; }
+        const { data: full } = await supabase.from("members").select("*").eq("id", lineExisting.id).single();
+        onSuccess(full);
+      } else {
+        const { error } = await supabase.from("members").insert([memberData]);
+        if (error) { alert(`註冊失敗:${error.message}`); setLoading(false); return; }
+        onSuccess(memberData);
+      }
+      setToast("✅ 註冊成功!歡迎加入");
+    } catch (e) {
+      alert(`發生錯誤:${e.message || e}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const doLogin = async () => {
+    const u = sanitize(username, 30);
+    if (!u) { alert("請輸入帳號"); return; }
+    if (!password) { alert("請輸入密碼"); return; }
+
+    setLoading(true);
+    try {
+      const { data: mem, error } = await supabase.from("members").select("*").eq("username", u).maybeSingle();
+      if (error || !mem) { alert("帳號不存在"); setLoading(false); return; }
+
+      const passwordHash = await hashPassword(password);
+      if (mem.password_hash !== passwordHash) { alert("密碼錯誤"); setLoading(false); return; }
+
+      // 若此帳號綁定的 LINE 跟當前不同 → 更新
+      if (mem.line_user_id !== lineUser.userId) {
+        if (!window.confirm(`此帳號原本綁定其他 LINE,是否要改綁定到當前 LINE?`)) {
+          setLoading(false);
+          return;
+        }
+        await supabase.from("members").update({
+          line_user_id: lineUser.userId,
+          line_name: lineUser.name,
+        }).eq("id", mem.id);
+        mem.line_user_id = lineUser.userId;
+        mem.line_name = lineUser.name;
+      }
+
+      onSuccess(mem);
+      setToast(`✅ 歡迎回來,${mem.community_name || mem.username}`);
+    } catch (e) {
+      alert(`發生錯誤:${e.message || e}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={{ padding: "40px 20px 60px", maxWidth: 440, margin: "0 auto" }}>
+      <div style={{ textAlign: "center", marginBottom: 32 }}>
+        <div style={{ fontSize: 32, fontWeight: 700, color: C.accentDark, letterSpacing: 1 }}>🌸 歡迎</div>
+        <div style={{ fontSize: 13, color: C.muted, marginTop: 4 }}>
+          {mode === "login" ? "使用帳號密碼登入" : "註冊新帳號並自動綁定 LINE"}
+        </div>
+      </div>
+
+      {/* 切換 tab */}
+      <div style={{ display: "flex", background: C.bgDeep, borderRadius: 99, padding: 4, marginBottom: 24 }}>
+        <button onClick={() => setMode("login")}
+          style={{ flex: 1, padding: "10px 12px", borderRadius: 99, border: "none", background: mode === "login" ? C.accent : "transparent", color: mode === "login" ? "#fff" : C.textMid, fontWeight: 600, fontSize: 14, cursor: "pointer" }}>
+          登入
+        </button>
+        <button onClick={() => setMode("register")}
+          style={{ flex: 1, padding: "10px 12px", borderRadius: 99, border: "none", background: mode === "register" ? C.accent : "transparent", color: mode === "register" ? "#fff" : C.textMid, fontWeight: 600, fontSize: 14, cursor: "pointer" }}>
+          註冊
+        </button>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <div>
+          <label style={{ fontSize: 12, color: C.muted, fontWeight: 600, display: "block", marginBottom: 4 }}>帳號 *</label>
+          <input type="text" value={username} onChange={e => setUsername(e.target.value)}
+            placeholder="至少 3 個字元" autoComplete="username"
+            style={{ width: "100%", padding: "12px 14px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 15, boxSizing: "border-box", background: "#fff" }}/>
+        </div>
+
+        <div>
+          <label style={{ fontSize: 12, color: C.muted, fontWeight: 600, display: "block", marginBottom: 4 }}>密碼 *</label>
+          <input type="password" value={password} onChange={e => setPassword(e.target.value)}
+            placeholder="至少 6 個字元" autoComplete={mode === "login" ? "current-password" : "new-password"}
+            style={{ width: "100%", padding: "12px 14px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 15, boxSizing: "border-box", background: "#fff" }}/>
+        </div>
+
+        {mode === "register" && (
+          <>
+            <div>
+              <label style={{ fontSize: 12, color: C.muted, fontWeight: 600, display: "block", marginBottom: 4 }}>再次輸入密碼 *</label>
+              <input type="password" value={confirmPw} onChange={e => setConfirmPw(e.target.value)}
+                autoComplete="new-password"
+                style={{ width: "100%", padding: "12px 14px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 15, boxSizing: "border-box", background: "#fff" }}/>
+            </div>
+
+            <div style={{ height: 1, background: C.borderLight, margin: "8px 0" }}></div>
+            <div style={{ fontSize: 12, color: C.accent, fontWeight: 600 }}>📝 會員資料</div>
+
+            <div>
+              <label style={{ fontSize: 12, color: C.muted, fontWeight: 600, display: "block", marginBottom: 4 }}>社群名稱 *</label>
+              <input type="text" value={communityName} onChange={e => setCommunityName(e.target.value)}
+                placeholder="IG / Threads / FB 使用的名字"
+                style={{ width: "100%", padding: "12px 14px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 15, boxSizing: "border-box", background: "#fff" }}/>
+            </div>
+
+            <div>
+              <label style={{ fontSize: 12, color: C.muted, fontWeight: 600, display: "block", marginBottom: 4 }}>收件人姓名 *</label>
+              <input type="text" value={recipientName} onChange={e => setRecipientName(e.target.value)}
+                placeholder="寄件用的真實姓名"
+                style={{ width: "100%", padding: "12px 14px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 15, boxSizing: "border-box", background: "#fff" }}/>
+            </div>
+
+            <div>
+              <label style={{ fontSize: 12, color: C.muted, fontWeight: 600, display: "block", marginBottom: 4 }}>電話 *</label>
+              <input type="tel" inputMode="tel" value={phone} onChange={e => setPhone(e.target.value.replace(/[^\d\-]/g, ""))}
+                placeholder="0912-345-678"
+                style={{ width: "100%", padding: "12px 14px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 15, boxSizing: "border-box", background: "#fff" }}/>
+            </div>
+
+            <div>
+              <label style={{ fontSize: 12, color: C.muted, fontWeight: 600, display: "block", marginBottom: 4 }}>常用 7-11 門市 <span style={{ color: C.faint, fontWeight: 400 }}>(可選)</span></label>
+              <input type="text" value={sevenStore} onChange={e => setSevenStore(e.target.value)}
+                placeholder="例:湊湊-妹妹門市"
+                style={{ width: "100%", padding: "12px 14px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 15, boxSizing: "border-box", background: "#fff" }}/>
+            </div>
+
+            <div style={{ fontSize: 11, color: C.faint, padding: "8px 12px", background: C.bgDeep, borderRadius: 8 }}>
+              💡 完成註冊後,將自動綁定當前 LINE 帳號
+            </div>
+          </>
+        )}
+
+        <button onClick={mode === "login" ? doLogin : doRegister} disabled={loading}
+          style={{ marginTop: 8, padding: "14px 20px", background: loading ? C.faint : C.accent, color: "#fff", border: "none", borderRadius: 12, fontSize: 15, fontWeight: 700, cursor: loading ? "not-allowed" : "pointer", letterSpacing: .5 }}>
+          {loading ? "處理中..." : (mode === "login" ? "登入" : "註冊並綁定 LINE")}
+        </button>
+
+        <div style={{ textAlign: "center", fontSize: 12, color: C.muted, marginTop: 8 }}>
+          當前 LINE:<span style={{ color: C.accent }}>{lineUser.name}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ProfileTab({member,setMember,lineUser,setToast,forced=false}){
   const [form,setForm]=useState({community_name:"",line_id:"",ig_threads:"",recipient_name:"",phone:"",seven_store:""});
   const [saving,setSaving]=useState(false);
@@ -392,6 +607,29 @@ function ProfileTab({member,setMember,lineUser,setToast,forced=false}){
 function ProductDetailSheet({product,onAdd,onClose,rate,isWholesale=false}){
   const [selVariants,setSelVariants]=useState({});
   const [qty,setQty]=useState(1);
+
+  // 若商品帶了 _preselectVariantId,自動選中該款式
+  useEffect(()=>{
+    if (!product?._preselectVariantId || !product?.variants) return;
+    const v = product.variants.find(v => v.id === product._preselectVariantId);
+    if (v && v.name) {
+      // 判斷是不是「群組:選項」格式
+      const nameStr = String(v.name);
+      const preset = {};
+      if (nameStr.includes(":") || nameStr.includes(":")) {
+        // e.g. "顏色:黑色 / 尺寸:M"
+        nameStr.split(" / ").forEach(part => {
+          const [g, o] = part.split(/[::]/).map(s => s.trim());
+          if (g && o) preset[g] = o;
+        });
+      } else {
+        // 單一款式群組
+        preset["款式"] = nameStr;
+      }
+      setSelVariants(preset);
+    }
+  }, [product]);
+
   if(!product)return null;
   const hasVariants=product.variants&&product.variants.length>0;
   const variantGroups=(()=>{
@@ -619,19 +857,22 @@ function CatalogTab({products,inStock,rate,cart,onAdd,showCart,setShowCart,updat
     window.location.href = emapUrl;
   };
 
-  // 從 URL 讀 ?product=xxx 自動打開該商品
+  // 從 URL 讀 ?product=xxx 自動打開該商品(可再帶 ?variant=xxx 預選款式)
   useEffect(()=>{
     if (!products || products.length === 0) return;
     try {
       const params = new URLSearchParams(window.location.search);
       const productId = params.get("product");
+      const variantId = params.get("variant");
       if (productId) {
         const found = products.find(p => p.id === productId);
         if (found && found.status === "on") {
-          setSelected(found);
+          // 帶上預選款式 id,ProductDetailSheet 內會處理
+          setSelected({ ...found, _preselectVariantId: variantId || null });
           // 用完清掉,避免重進 App 又跳出
           const url = new URL(window.location);
           url.searchParams.delete("product");
+          url.searchParams.delete("variant");
           window.history.replaceState({}, "", url);
         }
       }
@@ -1575,6 +1816,14 @@ function MainApp({lineUser,data,setData}){
       .on("postgres_changes",{event:"DELETE",schema:"public",table:"wishlist"},
         (payload)=>{setData(d=>({...d,wishlist:d.wishlist.filter(w=>w.id!==payload.old.id)}));}
       )
+      // 訂閱 members 表:業者設為批發客時,客人即時看到批發價
+      .on("postgres_changes",{event:"UPDATE",schema:"public",table:"members",filter:`line_user_id=eq.${lineUser.userId}`},
+        (payload)=>{setMember(payload.new);}
+      )
+      // 訂閱 settings 表:業者改公告/自動取消時數時,客人即時看到
+      .on("postgres_changes",{event:"UPDATE",schema:"public",table:"settings"},
+        ()=>{reloadData();}
+      )
       .subscribe((status)=>{
         console.log("📡 客人端 Realtime status:", status);
       });
@@ -1634,6 +1883,8 @@ function MainApp({lineUser,data,setData}){
       store_code: sanitize(payInfo.storeCode || "", 30),
       store_name: sanitize(payInfo.storeName || "", 100),
       store_address: sanitize(payInfo.storeAddress || "", 200),
+      is_wholesale: !!member?.is_wholesale,
+      wholesale_no: sanitize(member?.wholesale_no || "", 30),
       created_at:new Date().toISOString(),
     };
     try{
@@ -1646,7 +1897,7 @@ function MainApp({lineUser,data,setData}){
       console.error(e);
       // 如果 Supabase 還沒有 deposit_* 欄位,fallback 不帶這些欄位重試
       if(e.message&&/deposit_/.test(e.message)){
-        const{deposit_amount,deposit_last5,deposit_bank,deposit_paid,delivery_method,recipient_phone,store_code,store_name,store_address,...rest}=orderData;
+        const{deposit_amount,deposit_last5,deposit_bank,deposit_paid,delivery_method,recipient_phone,store_code,store_name,store_address,is_wholesale,wholesale_no,...rest}=orderData;
         const{data:saved2,error:e2}=await supabase.from("orders").insert([rest]).select().single();
         if(!e2){
           setData(d=>({...d,orders:[saved2,...d.orders]}));
@@ -1697,6 +1948,20 @@ function MainApp({lineUser,data,setData}){
   }
 
   // 個資未填齊 → 強制顯示填寫頁(沒有 BottomNav、沒有購物車、沒有登出以外的功能)
+  // 帳號密碼登入流程:
+  // - 若 member 有 username → 已註冊過 → 進入系統
+  // - 若 member 是 {} 且沒 username → 顯示註冊/登入畫面
+  const hasAccount = !!(member?.username);
+
+  if(!hasAccount){
+    return(
+      <div style={{minHeight:"100vh",background:C.bg,maxWidth:480,margin:"0 auto",paddingBottom:60}}>
+        <AuthPage lineUser={lineUser} onSuccess={m => setMember(m)} setToast={setToast}/>
+        {toast&&<Toast msg={toast} onDone={()=>setToast(null)}/>}
+      </div>
+    );
+  }
+
   if(!isProfileComplete){
     return(
       <div style={{minHeight:"100vh",background:C.bg,maxWidth:480,margin:"0 auto",paddingBottom:60}}>
