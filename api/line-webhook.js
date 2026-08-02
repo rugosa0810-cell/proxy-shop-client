@@ -389,11 +389,12 @@ async function handleImageMessage(event) {
   const lineUserId = event.source.userId;
   try {
     // 若之前已有暫存但客人沒接 +1 就傳新圖 → 先清掉舊的實體檔案,避免佔空間
-    const { data: oldPending } = await supabase
+    const { data: oldPending, error: selErr } = await supabase
       .from("pending_images")
       .select("image_path")
       .eq("line_user_id", lineUserId)
       .maybeSingle();
+    if (selErr) throw new Error(`查詢 pending_images 失敗:${selErr.message}`);
     if (oldPending?.image_path) {
       await supabase.storage.from("product-images").remove([oldPending.image_path]).catch(() => {});
     }
@@ -407,13 +408,14 @@ async function handleImageMessage(event) {
 
     const { data: urlData } = supabase.storage.from("product-images").getPublicUrl(fileName);
 
-    await supabase.from("pending_images").upsert(
+    const { error: writeErr } = await supabase.from("pending_images").upsert(
       [{ line_user_id: lineUserId, image_url: urlData.publicUrl, image_path: fileName, created_at: new Date().toISOString() }],
       { onConflict: "line_user_id" }
     );
+    if (writeErr) throw new Error(`寫入 pending_images 失敗:${writeErr.message}`);
     // 圖片先靜默暫存,不主動回覆,避免干擾;等客人打 +1 才回應
   } catch (err) {
-    console.error("處理圖片失敗:", err);
+    console.error("處理圖片失敗:", err.message || err);
   }
 }
 
