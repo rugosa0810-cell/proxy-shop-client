@@ -345,6 +345,35 @@ function buildOwnerNotifyFlex({ customerName, imageUrl }) {
   return { type: "flex", altText: `新的許願待報價 · ${customerName}`, contents: bubble };
 }
 
+// 7. 通知客人:報價完成,點擊即可下單
+function buildCustomerOrderFlex({ imageUrl, price, wishId, itemName }) {
+  const orderUrl = `${CUSTOMER_LIFF_URL}?wish=${encodeURIComponent(wishId)}`;
+  const bubble = {
+    type: "bubble",
+    body: {
+      type: "box",
+      layout: "vertical",
+      spacing: "md",
+      contents: [
+        { type: "text", text: "🎉 已完成報價", weight: "bold", size: "lg", color: "#a8847e" },
+        { type: "text", text: itemName || "您許願的商品", size: "md", weight: "bold", wrap: true },
+        { type: "text", text: `NT$ ${Number(price || 0).toLocaleString()}`, size: "xl", weight: "bold", color: "#a8847e" },
+      ],
+    },
+    footer: {
+      type: "box",
+      layout: "vertical",
+      contents: [
+        { type: "button", style: "primary", action: { type: "uri", label: "點我下單", uri: orderUrl } },
+      ],
+    },
+  };
+  if (validImageUrl(imageUrl)) {
+    bubble.hero = { type: "image", url: imageUrl, size: "full", aspectRatio: "20:13", aspectMode: "cover" };
+  }
+  return { type: "flex", altText: "已完成報價,點我下單", contents: bubble };
+}
+
 // 下載 LINE 傳來的圖片(回傳 Buffer)
 async function fetchLineImage(messageId) {
   const res = await fetch(`https://api-data.line.me/v2/bot/message/${messageId}/content`, {
@@ -359,6 +388,16 @@ async function fetchLineImage(messageId) {
 async function handleImageMessage(event) {
   const lineUserId = event.source.userId;
   try {
+    // 若之前已有暫存但客人沒接 +1 就傳新圖 → 先清掉舊的實體檔案,避免佔空間
+    const { data: oldPending } = await supabase
+      .from("pending_images")
+      .select("image_path")
+      .eq("line_user_id", lineUserId)
+      .maybeSingle();
+    if (oldPending?.image_path) {
+      await supabase.storage.from("product-images").remove([oldPending.image_path]).catch(() => {});
+    }
+
     const buffer = await fetchLineImage(event.message.id);
     const fileName = `wish_${Date.now()}_${secureUid()}.jpg`;
     const { error: upErr } = await supabase.storage
@@ -369,7 +408,7 @@ async function handleImageMessage(event) {
     const { data: urlData } = supabase.storage.from("product-images").getPublicUrl(fileName);
 
     await supabase.from("pending_images").upsert(
-      [{ line_user_id: lineUserId, image_url: urlData.publicUrl, created_at: new Date().toISOString() }],
+      [{ line_user_id: lineUserId, image_url: urlData.publicUrl, image_path: fileName, created_at: new Date().toISOString() }],
       { onConflict: "line_user_id" }
     );
     // 圖片先靜默暫存,不主動回覆,避免干擾;等客人打 +1 才回應
@@ -413,6 +452,9 @@ async function handleBarePlusOne(event) {
   await supabase.from("pending_images").delete().eq("line_user_id", lineUserId);
 
   if (ageMs > PENDING_IMAGE_TTL_MS) {
+    if (pending.image_path) {
+      await supabase.storage.from("product-images").remove([pending.image_path]).catch(() => {});
+    }
     await replyMessage(replyToken, [
       { type: "text", text: `圖片已逾時失效(超過 10 分鐘),請重新傳一次圖片再打 +1 📷` },
     ]);
@@ -506,13 +548,15 @@ async function handleOwnerQuote(event, quote) {
     { type: "text", text: `✅ 已為「${pendingQuote.customer_name}」報價 NT$${quote.price}${quote.note ? `\n備註:${quote.note}` : ""}` },
   ]);
 
-  // 通知客人:報價已完成,可去下單
+  // 通知客人:報價已完成,推播可點擊下單的卡片
   try {
     await pushMessage(pendingQuote.customer_line_id, [
-      {
-        type: "text",
-        text: `🎉 您的許願已完成報價:NT$${quote.price}\n請至「許願清單」查看並加入購物車下單哦!`,
-      },
+      buildCustomerOrderFlex({
+        imageUrl: pendingQuote.image_url,
+        price: quote.price,
+        wishId: pendingQuote.wish_id,
+        itemName: quote.note || null,
+      }),
     ]);
   } catch (err) {
     console.error("通知客人失敗:", err);

@@ -1851,6 +1851,32 @@ function MainApp({lineUser,data,setData}){
   const updateCartQty=(id,delta)=>setCart(p=>p.map(c=>c.id===id?{...c,qty:Math.max(1,Math.min(99,c.qty+delta))}:c));
   const removeFromCart=id=>setCart(p=>p.filter(c=>c.id!==id));
 
+  // 從 LINE Bot 推播的下單卡片點進來:?wish=xxx → 自動把已報價的許願加入購物車並打開購物車
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const wishId = params.get("wish");
+      if (!wishId) return;
+      const wish = (data.wishlist || []).find(w => w.id === wishId);
+      if (wish && wish.status === "found" && Number(wish.price) > 0) {
+        addToCart({
+          id: wish.id + "_wish",
+          name: wish.name,
+          price: wish.price,
+          image: wish.img_url || "",
+          category: "許願商品",
+        });
+        setTab("catalog");
+        setShowCart(true);
+      }
+      // 用完清掉,避免重進 App 又重複加入購物車
+      const url = new URL(window.location);
+      url.searchParams.delete("wish");
+      window.history.replaceState({}, "", url);
+    } catch (e) { console.warn("wish URL 參數處理失敗:", e); }
+  }, [data.wishlist]);
+
+
   const submitOrder=async(payInfo={})=>{
     if(!cart.length)return;
     const no=secureOrderNo();
