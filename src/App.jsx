@@ -450,15 +450,15 @@ function AuthPage({ lineUser, onSuccess, setToast }) {
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
         <div>
           <label style={{ fontSize: 12, color: C.muted, fontWeight: 600, display: "block", marginBottom: 4 }}>帳號 *</label>
-          <input type="text" value={username} onChange={e => setUsername(e.target.value)}
-            placeholder="至少 3 個字元" autoComplete="username"
+          <input type="text" value={username} onChange={e => setUsername(e.target.value.replace(/\s/g, ""))}
+            autoComplete="username"
             style={{ width: "100%", padding: "12px 14px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 15, boxSizing: "border-box", background: "#fff" }}/>
         </div>
 
         <div>
           <label style={{ fontSize: 12, color: C.muted, fontWeight: 600, display: "block", marginBottom: 4 }}>密碼 *</label>
           <input type="password" value={password} onChange={e => setPassword(e.target.value)}
-            placeholder="至少 6 個字元" autoComplete={mode === "login" ? "current-password" : "new-password"}
+            autoComplete={mode === "login" ? "current-password" : "new-password"}
             style={{ width: "100%", padding: "12px 14px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 15, boxSizing: "border-box", background: "#fff" }}/>
         </div>
 
@@ -477,28 +477,24 @@ function AuthPage({ lineUser, onSuccess, setToast }) {
             <div>
               <label style={{ fontSize: 12, color: C.muted, fontWeight: 600, display: "block", marginBottom: 4 }}>社群名稱 *</label>
               <input type="text" value={communityName} onChange={e => setCommunityName(e.target.value)}
-                placeholder="IG / Threads / FB 使用的名字"
                 style={{ width: "100%", padding: "12px 14px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 15, boxSizing: "border-box", background: "#fff" }}/>
             </div>
 
             <div>
               <label style={{ fontSize: 12, color: C.muted, fontWeight: 600, display: "block", marginBottom: 4 }}>收件人姓名 *</label>
               <input type="text" value={recipientName} onChange={e => setRecipientName(e.target.value)}
-                placeholder="寄件用的真實姓名"
                 style={{ width: "100%", padding: "12px 14px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 15, boxSizing: "border-box", background: "#fff" }}/>
             </div>
 
             <div>
               <label style={{ fontSize: 12, color: C.muted, fontWeight: 600, display: "block", marginBottom: 4 }}>電話 *</label>
               <input type="tel" inputMode="tel" value={phone} onChange={e => setPhone(e.target.value.replace(/[^\d\-]/g, ""))}
-                placeholder="0912-345-678"
                 style={{ width: "100%", padding: "12px 14px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 15, boxSizing: "border-box", background: "#fff" }}/>
             </div>
 
             <div>
               <label style={{ fontSize: 12, color: C.muted, fontWeight: 600, display: "block", marginBottom: 4 }}>常用 7-11 門市 <span style={{ color: C.faint, fontWeight: 400 }}>(可選)</span></label>
               <input type="text" value={sevenStore} onChange={e => setSevenStore(e.target.value)}
-                placeholder="例:湊湊-妹妹門市"
                 style={{ width: "100%", padding: "12px 14px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 15, boxSizing: "border-box", background: "#fff" }}/>
             </div>
 
@@ -1347,7 +1343,12 @@ function WishlistTab({wishes,onAddWish,onDeleteWish,onAddToCart,setTab}){
                   <div style={{background:C.greenBg,borderRadius:C.rSm,padding:"12px 14px",border:`1px solid ${C.green}20`,marginBottom:10}}>
                     {hasPrice&&<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}><div style={{fontSize:12,color:C.muted}}>Luna 報價</div><div style={{fontSize:17,fontWeight:700,color:C.green}}>{fmtMoney(w.price)}</div></div>}
                     {w.found_note&&<div style={{fontSize:12,color:C.textMid,marginBottom:10,lineHeight:1.6}}>{w.found_note}</div>}
-                    <Btn full sm onClick={()=>{onAddToCart({id:w.id+"_wish",name:w.name,price:hasPrice?w.price:0,image:w.img_url||"",category:"許願商品"});setTab("catalog");}}>加入購物車下單</Btn>
+                    <Btn full sm onClick={()=>{
+                      const finalPrice = hasPrice?w.price:0;
+                      const depositAmt = Math.max(0, finalPrice - 100);
+                      onAddToCart({id:w.id+"_wish",name:w.name,price:finalPrice,image:w.img_url||"",category:"許願商品",payment_type:"deposit",deposit_amount:depositAmt});
+                      setTab("catalog");
+                    }}>加入購物車下單</Btn>
                   </div>
                 )}
                 <button onClick={()=>{if(window.confirm("確定要刪除這個許願嗎？"))onDeleteWish(w.id);}}
@@ -1859,12 +1860,15 @@ function MainApp({lineUser,data,setData}){
       if (!wishId) return;
       const wish = (data.wishlist || []).find(w => w.id === wishId);
       if (wish && wish.status === "found" && Number(wish.price) > 0) {
+        const depositAmt = Math.max(0, Number(wish.price) - 100);
         addToCart({
           id: wish.id + "_wish",
           name: wish.name,
           price: wish.price,
           image: wish.img_url || "",
           category: "許願商品",
+          payment_type: "deposit",
+          deposit_amount: depositAmt,
         });
         setTab("catalog");
         setShowCart(true);

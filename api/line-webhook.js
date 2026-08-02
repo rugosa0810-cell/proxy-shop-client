@@ -335,7 +335,7 @@ function buildOwnerNotifyFlex({ customerName, imageUrl }) {
         { type: "text", text: "📥 新的許願待報價", weight: "bold", size: "lg", color: "#a8847e" },
         { type: "text", text: `客人:${customerName}`, size: "sm", color: "#888888" },
         { type: "separator", margin: "md" },
-        { type: "text", text: "回覆「報價 850」即可完成設定,客人會立即收到通知並可下單", size: "sm", wrap: true, margin: "md" },
+        { type: "text", text: "回覆「品名+價格」即可完成設定,例如「東京限定娃娃+850」,客人會立即收到通知並可下單", size: "sm", wrap: true, margin: "md" },
       ],
     },
   };
@@ -508,14 +508,18 @@ async function handleBarePlusOne(event) {
   await replyMessage(replyToken, [buildWishCreatedFlex(pending.image_url)]);
 }
 
-// ── 業者報價指令:「報價 850」或「報價 850 東京限定娃娃」 ──────────
+// ── 業者報價指令:「品名+價格」,例如「東京限定娃娃+850」 ──────────
 // 只有 OWNER_LINE_USER_ID 可以下這個指令,依先來後到套用到最舊一筆待報價項目
+// 格式:「品名+價格」,例如「東京限定娃娃+850」
+// 價格限制至少兩位數(>=10),避免跟客人的「品名+1」下單指令搞混
 function parseQuoteCommand(text) {
-  const m = text.trim().match(/^報價\s*(\d+)(?:\s+(.+))?$/);
+  const m = text.trim().match(/^(.+?)\+(\d+)$/);
   if (!m) return null;
-  const price = parseInt(m[1], 10);
-  if (!price || price <= 0) return null;
-  return { price, note: (m[2] || "").trim() };
+  const name = m[1].trim();
+  if (!name) return null;
+  const price = parseInt(m[2], 10);
+  if (!price || price < 10) return null;
+  return { name, price };
 }
 
 async function handleOwnerQuote(event, quote) {
@@ -534,8 +538,7 @@ async function handleOwnerQuote(event, quote) {
     return;
   }
 
-  const updatePatch = { status: "found", price: quote.price };
-  if (quote.note) updatePatch.found_note = quote.note;
+  const updatePatch = { status: "found", price: quote.price, name: quote.name };
 
   const { error } = await supabase.from("wishlist").update(updatePatch).eq("id", pendingQuote.wish_id);
   if (error) {
@@ -547,7 +550,7 @@ async function handleOwnerQuote(event, quote) {
   await supabase.from("pending_quotes").update({ quoted: true }).eq("id", pendingQuote.id);
 
   await replyMessage(replyToken, [
-    { type: "text", text: `✅ 已為「${pendingQuote.customer_name}」報價 NT$${quote.price}${quote.note ? `\n備註:${quote.note}` : ""}` },
+    { type: "text", text: `✅ 已為「${pendingQuote.customer_name}」報價\n品名:${quote.name}\n價格:NT$${quote.price}` },
   ]);
 
   // 通知客人:報價已完成,推播可點擊下單的卡片
@@ -557,7 +560,7 @@ async function handleOwnerQuote(event, quote) {
         imageUrl: pendingQuote.image_url,
         price: quote.price,
         wishId: pendingQuote.wish_id,
-        itemName: quote.note || null,
+        itemName: quote.name,
       }),
     ]);
   } catch (err) {
