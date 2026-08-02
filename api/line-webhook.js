@@ -5,7 +5,7 @@
 //   LINE_CHANNEL_ACCESS_TOKEN   → LINE Basic settings 分頁的 Channel access token
 //   LINE_CHANNEL_SECRET         → LINE Basic settings 分頁的 Channel secret
 //   SUPABASE_URL                → Supabase 專案 URL
-//   SUPABASE_SERVICE_ROLE_KEY   → Supabase Settings → API 的 service_role key(不是 anon key!)
+//   SUPABASE_SERVICE_ROLE_KEY   → Supabase Settings → API 的 secret / service_role key
 
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
@@ -16,15 +16,15 @@ export const config = {
   },
 };
 
-// service role key 繞過 RLS,只能在後端使用
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
 const CUSTOMER_LIFF_URL = "https://liff.line.me/2009872512-JJAaJ7Bi";
+const CONTACT_TEXT = "若持續有問題,請直接留言告訴我們商品名稱和數量,我們會盡快協助您 🙏";
 
-// ── 工具函式 ──────────────────────────────────────────────
+// ── 基礎工具 ──────────────────────────────────────────────
 function getRawBody(req) {
   return new Promise((resolve, reject) => {
     let data = "";
@@ -55,7 +55,6 @@ async function replyMessage(replyToken, messages) {
   return res;
 }
 
-// 跟 admin 後台 secureUid() 一致的 ID 產生器
 function secureUid() {
   const arr = new Uint8Array(9);
   crypto.randomFillSync(arr);
@@ -66,23 +65,36 @@ function fmtMoney(n) {
   return `NT$${Number(n || 0).toLocaleString()}`;
 }
 
+// 判斷圖片是不是可以放進 Flex Message(必須是 http(s) 網址,base64 不行)
+function validImageUrl(url) {
+  return typeof url === "string" && /^https?:\/\//.test(url);
+}
+
 // ── +1 指令解析 ──────────────────────────────────────────
-// 格式: "A1 紅色 M +1" / "A1 +1" / "白色針織衫 +1"
-// 回傳 { productToken, specTokens, qty } 或 null(格式不符)
+// 支援:「A1 紅色 M +1」「A1+1」「A1紅色M +1」(有無空格都可以)
 function parsePlusOneCommand(text) {
   const m = text.trim().match(/^(.+?)\s*\+(\d{1,3})$/);
   if (!m) return null;
   const qty = parseInt(m[2], 10);
   if (!qty || qty <= 0 || qty > 999) return null;
-  const tokens = m[1].trim().split(/\s+/).filter(Boolean);
+
+  const body = m[1].trim();
+  let tokens = body.split(/\s+/).filter(Boolean);
   if (tokens.length === 0) return null;
+
+  // 只有一個詞時,嘗試把「英數字短編號」跟後面黏在一起的文字拆開
+  // 例如 "JP080201東京限定2號吊飾娃" → ["JP080201", "東京限定2號吊飾娃"]
+  if (tokens.length === 1) {
+    const splitMatch = tokens[0].match(/^([A-Za-z0-9]{1,10})([^\sA-Za-z0-9].*)$/);
+    if (splitMatch) tokens = [splitMatch[1], splitMatch[2]];
+  }
+
   const [productToken, ...specTokens] = tokens;
-  return { productToken, specTokens, fullProductText: m[1].trim(), qty };
+  return { productToken, specTokens, fullProductText: body, qty };
 }
 
-// 找商品:先比對 short_code,比對不到再用名稱模糊比對
+// ── 找商品 / 找款式 ───────────────────────────────────────
 async function findProduct(productToken, fullProductText) {
-  // 1. 短編號完全比對(不分大小寫)
   const { data: byCode } = await supabase
     .from("products")
     .select("*")
@@ -91,7 +103,6 @@ async function findProduct(productToken, fullProductText) {
     .maybeSingle();
   if (byCode) return byCode;
 
-  // 2. 名稱模糊比對(用完整文字,因為商品名稱可能有空白,例如「白色 針織衫」)
   const { data: byName } = await supabase
     .from("products")
     .select("*")
@@ -104,7 +115,6 @@ async function findProduct(productToken, fullProductText) {
   return null;
 }
 
-// 找款式:用剩下的文字(去掉商品名稱後)去比對 variants[].name
 function findVariant(product, specTokens) {
   const variants = product.variants || [];
   if (variants.length === 0) return { variant: null, needsSpec: false };
@@ -113,21 +123,165 @@ function findVariant(product, specTokens) {
   if (specTokens.length === 0) {
     return { variant: null, needsSpec: true, options: variants };
   }
-  const specText = specTokens.join(" ");
-  const matched = variants.filter((v) =>
-    String(v.name).replace(/\s+/g, "").includes(specText.replace(/\s+/g, ""))
-  );
+  const specText = specTokens.join(" ").replace(/\s+/g, "");
+  const matched = variants.filter((v) => String(v.name).replace(/\s+/g, "").includes(specText));
   if (matched.length === 1) return { variant: matched[0], needsSpec: false };
   return { variant: null, needsSpec: true, options: variants };
 }
 
-// 組出款式清單文字(給客人看的錯誤提示)
-function buildSpecListText(product, options) {
-  const lines = options.map((v) => `・${v.name}(${fmtMoney(v.price)})`);
-  return `「${product.name}」有多種款式,請重打一次並註明款式:\n\n${lines.join("\n")}\n\n例如:${product.short_code || product.name} ${options[0].name} +1`;
+// ── Flex Message 產生器 ───────────────────────────────────
+
+// 1. 款式選擇卡片:每個款式一顆按鈕,點了直接送出對應指令
+function buildVariantSelectFlex(product, options) {
+  const buttons = options.slice(0, 11).map((v) => ({
+    type: "button",
+    style: "secondary",
+    height: "sm",
+    action: {
+      type: "message",
+      label: `${v.name}(${fmtMoney(v.price)})`.slice(0, 40),
+      text: `${product.short_code || product.name} ${v.name} +1`,
+    },
+  }));
+
+  const bodyContents = [
+    { type: "text", text: product.name, weight: "bold", size: "md", wrap: true },
+    { type: "text", text: "請選擇款式:", size: "sm", color: "#888888", margin: "sm" },
+  ];
+
+  const bubble = {
+    type: "bubble",
+    body: { type: "box", layout: "vertical", spacing: "md", contents: bodyContents },
+    footer: { type: "box", layout: "vertical", spacing: "sm", contents: buttons },
+  };
+
+  if (validImageUrl(product.image)) {
+    bubble.hero = { type: "image", url: product.image, size: "full", aspectRatio: "20:13", aspectMode: "cover" };
+  }
+
+  return {
+    type: "flex",
+    altText: `請選擇「${product.name}」的款式`,
+    contents: bubble,
+  };
 }
 
-const CONTACT_TEXT = "若持續有問題,請直接留言告訴我們商品名稱和數量,我們會盡快協助您 🙏";
+// 2. 多個候選商品卡片(carousel)
+function buildProductAmbiguousFlex(candidates) {
+  const bubbles = candidates.slice(0, 10).map((p) => {
+    const prices = (p.variants || []).map((v) => Number(v.price) || 0).filter((x) => x > 0);
+    const minP = prices.length ? Math.min(...prices) : 0;
+    const maxP = prices.length ? Math.max(...prices) : 0;
+    const priceLabel = prices.length === 0 ? "" : minP === maxP ? fmtMoney(minP) : `${fmtMoney(minP)} ~ ${fmtMoney(maxP)}`;
+
+    const bubble = {
+      type: "bubble",
+      size: "micro",
+      body: {
+        type: "box",
+        layout: "vertical",
+        spacing: "sm",
+        contents: [
+          { type: "text", text: p.name, weight: "bold", size: "sm", wrap: true },
+          ...(priceLabel ? [{ type: "text", text: priceLabel, size: "xs", color: "#a8847e" }] : []),
+        ],
+      },
+      footer: {
+        type: "box",
+        layout: "vertical",
+        contents: [
+          {
+            type: "button",
+            style: "primary",
+            height: "sm",
+            action: { type: "message", label: "選這個 +1", text: `${p.short_code || p.name} +1` },
+          },
+        ],
+      },
+    };
+    if (validImageUrl(p.image)) {
+      bubble.hero = { type: "image", url: p.image, size: "full", aspectRatio: "1:1", aspectMode: "cover" };
+    }
+    return bubble;
+  });
+
+  return {
+    type: "flex",
+    altText: "找到多個符合的商品,請選擇",
+    contents: { type: "carousel", contents: bubbles },
+  };
+}
+
+// 3. 建單成功卡片
+function buildOrderConfirmFlex({ no, itemName, image, qty, total }) {
+  const bubble = {
+    type: "bubble",
+    body: {
+      type: "box",
+      layout: "vertical",
+      spacing: "md",
+      contents: [
+        { type: "text", text: "✅ 已建立訂單", weight: "bold", size: "lg", color: "#a8847e" },
+        { type: "text", text: `#${no}`, size: "sm", color: "#888888" },
+        { type: "separator", margin: "md" },
+        { type: "text", text: itemName, weight: "bold", size: "md", wrap: true, margin: "md" },
+        {
+          type: "box",
+          layout: "horizontal",
+          margin: "sm",
+          contents: [
+            { type: "text", text: "數量", size: "sm", color: "#888888" },
+            { type: "text", text: `${qty}`, size: "sm", align: "end" },
+          ],
+        },
+        {
+          type: "box",
+          layout: "horizontal",
+          contents: [
+            { type: "text", text: "金額", size: "sm", color: "#888888" },
+            { type: "text", text: fmtMoney(total), size: "sm", align: "end", weight: "bold", color: "#a8847e" },
+          ],
+        },
+        { type: "text", text: "我們會盡快為您安排採買,謝謝!", size: "xs", color: "#aaaaaa", wrap: true, margin: "md" },
+      ],
+    },
+  };
+  if (validImageUrl(image)) {
+    bubble.hero = { type: "image", url: image, size: "full", aspectRatio: "20:13", aspectMode: "cover" };
+  }
+  return {
+    type: "flex",
+    altText: `已建立訂單 #${no}`,
+    contents: bubble,
+  };
+}
+
+// 4. 尚未綁定會員卡片
+function buildBindMemberFlex() {
+  return {
+    type: "flex",
+    altText: "請先綁定會員資料",
+    contents: {
+      type: "bubble",
+      body: {
+        type: "box",
+        layout: "vertical",
+        spacing: "md",
+        contents: [
+          { type: "text", text: "尚未綁定會員資料 😅", weight: "bold", size: "md", wrap: true },
+          { type: "text", text: "請先完成會員綁定才能使用 +1 快速下單", size: "sm", color: "#888888", wrap: true },
+        ],
+      },
+      footer: {
+        type: "box",
+        layout: "vertical",
+        contents: [
+          { type: "button", style: "primary", action: { type: "uri", label: "前往綁定會員", uri: CUSTOMER_LIFF_URL } },
+        ],
+      },
+    },
+  };
+}
 
 // ── 主流程:處理 +1 建單 ─────────────────────────────────
 async function handlePlusOne(event, cmd) {
@@ -142,12 +296,7 @@ async function handlePlusOne(event, cmd) {
     .maybeSingle();
 
   if (!member) {
-    await replyMessage(replyToken, [
-      {
-        type: "text",
-        text: `尚未綁定會員資料,無法直接建單 😅\n請先到會員中心完成綁定:\n${CUSTOMER_LIFF_URL}\n\n${CONTACT_TEXT}`,
-      },
-    ]);
+    await replyMessage(replyToken, [buildBindMemberFlex()]);
     return;
   }
 
@@ -162,10 +311,7 @@ async function handlePlusOne(event, cmd) {
   }
 
   if (product._ambiguous) {
-    const names = product.candidates.map((p) => `・${p.short_code || ""} ${p.name}`).join("\n");
-    await replyMessage(replyToken, [
-      { type: "text", text: `找到多個符合的商品,請用更精確的編號或名稱:\n\n${names}\n\n${CONTACT_TEXT}` },
-    ]);
+    await replyMessage(replyToken, [buildProductAmbiguousFlex(product.candidates)]);
     return;
   }
 
@@ -173,9 +319,7 @@ async function handlePlusOne(event, cmd) {
   const { variant, needsSpec, options } = findVariant(product, cmd.specTokens);
 
   if (needsSpec) {
-    await replyMessage(replyToken, [
-      { type: "text", text: `${buildSpecListText(product, options)}\n\n${CONTACT_TEXT}` },
-    ]);
+    await replyMessage(replyToken, [buildVariantSelectFlex(product, options)]);
     return;
   }
 
@@ -194,14 +338,7 @@ async function handlePlusOne(event, cmd) {
   const qty = cmd.qty;
 
   const items = [
-    {
-      name: fullItemName,
-      cost,
-      price,
-      qty,
-      note: "",
-      image: product.image || "",
-    },
+    { name: fullItemName, cost, price, qty, note: "", image: product.image || "" },
   ];
   const total = price * qty;
   const profit = (price - cost) * qty;
@@ -229,12 +366,9 @@ async function handlePlusOne(event, cmd) {
     return;
   }
 
-  // 5. 回覆確認訊息
+  // 5. 回覆訂單卡片
   await replyMessage(replyToken, [
-    {
-      type: "text",
-      text: `✅ 已建立訂單 #${no}\n\n${fullItemName}\n數量:${qty}\n金額:${fmtMoney(total)}\n\n我們會盡快為您安排採買,謝謝!`,
-    },
+    buildOrderConfirmFlex({ no, itemName: fullItemName, image: product.image, qty, total }),
   ]);
 }
 
@@ -272,7 +406,6 @@ export default async function handler(req, res) {
       const cmd = parsePlusOneCommand(userText);
 
       if (cmd) {
-        // +1 建單指令
         try {
           await handlePlusOne(event, cmd);
         } catch (err) {
@@ -282,7 +415,6 @@ export default async function handler(req, res) {
           ]);
         }
       } else {
-        // 非 +1 指令 → 先簡單回覆確認 Bot 活著(未來可擴充其他指令)
         await replyMessage(replyToken, [{ type: "text", text: `收到:${userText}` }]);
       }
     }
