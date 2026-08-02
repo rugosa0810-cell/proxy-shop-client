@@ -337,11 +337,11 @@ function AuthPage({ lineUser, onSuccess, setToast }) {
     setLoading(true);
     try {
       // 檢查帳號是否已存在
-      const { data: existing } = await supabase.from("members").select("id").eq("username", u).maybeSingle();
+      const { data: existing } = await supabase.from("members").select("line_user_id").eq("username", u).maybeSingle();
       if (existing) { alert("此帳號已被使用,請換一個"); setLoading(false); return; }
 
       // 檢查此 LINE 是否已綁定過其他帳號
-      const { data: lineExisting } = await supabase.from("members").select("id, username").eq("line_user_id", lineUser.userId).maybeSingle();
+      const { data: lineExisting } = await supabase.from("members").select("line_user_id, username").eq("line_user_id", lineUser.userId).maybeSingle();
       if (lineExisting?.username) {
         alert(`此 LINE 已綁定帳號「${lineExisting.username}」,請直接登入`);
         setMode("login");
@@ -352,7 +352,6 @@ function AuthPage({ lineUser, onSuccess, setToast }) {
 
       const passwordHash = await hashPassword(password);
       const memberData = {
-        id: secureUid(),
         line_user_id: lineUser.userId,
         line_name: lineUser.name,
         username: u,
@@ -374,9 +373,9 @@ function AuthPage({ lineUser, onSuccess, setToast }) {
           phone: memberData.phone,
           seven_store: memberData.seven_store,
           ig_threads: memberData.ig_threads,
-        }).eq("id", lineExisting.id);
+        }).eq("line_user_id", lineExisting.line_user_id);
         if (error) { alert(`註冊失敗:${error.message}`); setLoading(false); return; }
-        const { data: full } = await supabase.from("members").select("*").eq("id", lineExisting.id).single();
+        const { data: full } = await supabase.from("members").select("*").eq("line_user_id", lineExisting.line_user_id).single();
         onSuccess(full);
       } else {
         const { error } = await supabase.from("members").insert([memberData]);
@@ -413,7 +412,7 @@ function AuthPage({ lineUser, onSuccess, setToast }) {
         await supabase.from("members").update({
           line_user_id: lineUser.userId,
           line_name: lineUser.name,
-        }).eq("id", mem.id);
+        }).eq("line_user_id", mem.line_user_id);
         mem.line_user_id = lineUser.userId;
         mem.line_name = lineUser.name;
       }
