@@ -493,6 +493,7 @@ function AuthPage({ lineUser, onSuccess, setToast }) {
               <label style={{ fontSize: 12, color: C.muted, fontWeight: 600, display: "block", marginBottom: 4 }}>社群名稱 *</label>
               <input type="text" value={communityName} onChange={e => setCommunityName(e.target.value)}
                 style={{ width: "100%", padding: "12px 14px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 15, boxSizing: "border-box", background: "#fff" }}/>
+              <div style={{ fontSize: 11, color: C.faint, marginTop: 4 }}>若名稱中有 emoji,麻煩更改為英文、中文或數字</div>
             </div>
 
             <div>
