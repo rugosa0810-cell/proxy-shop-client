@@ -230,8 +230,9 @@ function BottomNav({tab,setTab,cartCount}){
 }
 
 // ─── LINE 登入 ────────────────────────────────────────────────────
+// ─── LINE 登入(按鈕觸發,不自動跳轉) ────────────────────────
 function LineLogin({onSuccess}){
-  const [status,setStatus]=useState("loading");
+  const [status,setStatus]=useState("loading"); // loading | needLogin | error
   const [err,setErr]=useState("");
   const [debug,setDebug]=useState({});
 
@@ -245,10 +246,15 @@ function LineLogin({onSuccess}){
 
     liff.init({liffId})
       .then(()=>{
-        if(!liff.isLoggedIn()){liff.login();return;}
-        return liff.getProfile();
+        // 已經是登入狀態(例如剛從 LINE 授權頁導回來,或同一 session 內重新整理)→ 直接完成,不用再顯示按鈕
+        if(liff.isLoggedIn()){
+          return liff.getProfile().then(p=>{
+            onSuccess({name:sanitize(p.displayName,50)||"朋友",userId:p.userId,pictureUrl:p.pictureUrl});
+          });
+        }
+        // 尚未登入 → 顯示「使用 LINE 帳號登入」按鈕,等客人自己點,不自動跳轉
+        setStatus("needLogin");
       })
-      .then(p=>{if(!p)return;onSuccess({name:sanitize(p.displayName,50)||"朋友",userId:p.userId,pictureUrl:p.pictureUrl});})
       .catch(e=>{
         console.error("LIFF error:",e);
         setStatus("error");
@@ -256,6 +262,12 @@ function LineLogin({onSuccess}){
         setErr(`LINE 登入失敗\n${msg}\n\n常見原因:\n• LIFF ID 錯誤 (檢查 Vercel 環境變數)\n• Endpoint URL 跟目前網址不符 (LINE Developers 後台設定)\n• LIFF 應用已停用`);
       });
   },[]);
+
+  const startLogin=()=>{
+    if(typeof liff==="undefined"){alert("LIFF SDK 未載入,請重新整理");return;}
+    liff.login(); // 點擊後才觸發,會整頁跳轉去 LINE 授權,授權完成後導回本頁自動繼續
+  };
+
   return(
     <div style={{minHeight:"100vh",background:C.bg,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:32,padding:32}}>
       {/* Logo 區 */}
@@ -282,27 +294,22 @@ function LineLogin({onSuccess}){
             重新整理
           </button>
          </div>
-        :<div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:20,width:"100%",maxWidth:280}}>
-          {/* LINE 登入按鈕 */}
-          <button onClick={()=>{
-            const liffId=import.meta.env.VITE_LIFF_ID;
-            if(!liffId){alert("未設定 LIFF ID,請聯絡管理員");return;}
-            if(typeof liff==="undefined"){alert("LIFF SDK 未載入,請重新整理");return;}
-            if(!liff.isLoggedIn()){liff.login();}
-          }}
+        :status==="needLogin"
+        ?<div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:20,width:"100%",maxWidth:280}}>
+          {/* LINE 登入按鈕(需要客人主動點擊,不自動跳轉) */}
+          <button onClick={startLogin}
             style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"center",gap:12,background:"#06C755",color:"#fff",border:"none",borderRadius:14,padding:"14px 24px",fontSize:15,fontWeight:600,cursor:"pointer",letterSpacing:.5,boxShadow:"0 4px 16px rgba(6,199,85,.25)"}}>
             <svg width={22} height={22} viewBox="0 0 24 24" fill="currentColor">
               <path d="M19.365 9.863c.349 0 .63.285.63.631 0 .345-.281.63-.63.63H17.61v1.125h1.755c.349 0 .63.283.63.63 0 .344-.281.629-.63.629h-2.386c-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.63-.63h2.386c.346 0 .627.285.627.63 0 .349-.281.63-.63.63H17.61v1.125h1.755zm-3.855 3.016c0 .27-.174.51-.432.596-.064.021-.133.031-.199.031-.211 0-.391-.09-.51-.25l-2.443-3.317v2.94c0 .344-.279.629-.631.629-.346 0-.626-.285-.626-.629V8.108c0-.27.173-.51.43-.595.06-.023.136-.033.194-.033.195 0 .375.104.495.254l2.462 3.33V8.108c0-.345.282-.63.63-.63.345 0 .63.285.63.63v4.771zm-5.741 0c0 .344-.282.629-.631.629-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.63-.63.346 0 .628.285.628.63v4.771zm-2.466.629H4.917c-.345 0-.63-.285-.63-.629V8.108c0-.345.285-.63.63-.63.348 0 .63.285.63.63v4.141h1.756c.348 0 .629.283.629.63 0 .344-.281.629-.629.629M24 10.314C24 4.943 18.615.572 12 .572S0 4.943 0 10.314c0 4.811 4.27 8.842 10.035 9.608.391.082.923.258 1.058.59.12.301.079.766.038 1.08l-.164 1.02c-.045.301-.24 1.186 1.049.645 1.291-.539 6.916-4.070 9.436-6.975C23.176 14.393 24 12.458 24 10.314"/>
             </svg>
-            使用 LINE 登入
+            使用 LINE 帳號登入
           </button>
-
-          {/* 載入中提示 */}
-          <div style={{display:"flex",alignItems:"center",gap:8}}>
-            <div style={{width:16,height:16,borderRadius:"50%",border:`1.5px solid ${C.faint}`,borderTopColor:C.accent,animation:"spin 1s linear infinite"}}/>
-            <div style={{fontSize:12,color:C.faint,letterSpacing:.5}}>自動登入中</div>
-          </div>
+          <div style={{fontSize:12,color:C.faint,textAlign:"center",lineHeight:1.7}}>登入後,若尚未註冊將引導您完成註冊</div>
          </div>
+        :<div style={{display:"flex",alignItems:"center",gap:8}}>
+          <div style={{width:16,height:16,borderRadius:"50%",border:`1.5px solid ${C.faint}`,borderTopColor:C.accent,animation:"spin 1s linear infinite"}}/>
+          <div style={{fontSize:12,color:C.faint,letterSpacing:.5}}>載入中</div>
+        </div>
       }
 
       <div style={{position:"absolute",bottom:32,fontSize:11,color:C.faint,letterSpacing:.5}}>Powered by Luna Studio</div>
@@ -319,6 +326,7 @@ function AuthPage({ lineUser, onSuccess, setToast }) {
   const [confirmPw, setConfirmPw] = useState("");
   // 註冊時的個資
   const [communityName, setCommunityName] = useState("");
+  const [igThreads, setIgThreads] = useState("");
   const [recipientName, setRecipientName] = useState("");
   const [phone, setPhone] = useState("");
   const [sevenStore, setSevenStore] = useState("");
@@ -330,6 +338,7 @@ function AuthPage({ lineUser, onSuccess, setToast }) {
     if (!password || password.length < 6) { alert("密碼至少 6 個字元"); return; }
     if (password !== confirmPw) { alert("兩次密碼不一致"); return; }
     if (!sanitize(communityName)) { alert("請填寫社群名稱"); return; }
+    if (!sanitize(igThreads)) { alert("請填寫私人 IG / FB 連結"); return; }
     if (!sanitize(recipientName)) { alert("請填寫收件人姓名"); return; }
     const phoneClean = phone.replace(/\D/g, "");
     if (phoneClean.length < 8) { alert("請填寫正確的電話號碼"); return; }
@@ -360,7 +369,7 @@ function AuthPage({ lineUser, onSuccess, setToast }) {
         recipient_name: sanitize(recipientName, 50),
         phone: sanitize(phoneClean, 20),
         seven_store: sanitize(sevenStore, 100),
-        ig_threads: sanitize(communityName, 50), // 兼容舊欄位
+        ig_threads: sanitize(igThreads, 200),
         created_at: new Date().toISOString(),
       };
 
@@ -409,10 +418,16 @@ function AuthPage({ lineUser, onSuccess, setToast }) {
           setLoading(false);
           return;
         }
-        await supabase.from("members").update({
+        const { error: bindErr } = await supabase.from("members").update({
           line_user_id: lineUser.userId,
           line_name: lineUser.name,
         }).eq("line_user_id", mem.line_user_id);
+        if (bindErr) {
+          // 常見原因:目前這支 LINE 已經是另一筆會員資料的 line_user_id(主鍵衝突)
+          alert(`改綁定失敗:${bindErr.message}\n\n這支 LINE 可能已經綁定過其他帳號,請改用該帳號登入,或聯繫客服協助處理。`);
+          setLoading(false);
+          return;
+        }
         mem.line_user_id = lineUser.userId;
         mem.line_name = lineUser.name;
       }
@@ -477,6 +492,12 @@ function AuthPage({ lineUser, onSuccess, setToast }) {
             <div>
               <label style={{ fontSize: 12, color: C.muted, fontWeight: 600, display: "block", marginBottom: 4 }}>社群名稱 *</label>
               <input type="text" value={communityName} onChange={e => setCommunityName(e.target.value)}
+                style={{ width: "100%", padding: "12px 14px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 15, boxSizing: "border-box", background: "#fff" }}/>
+            </div>
+
+            <div>
+              <label style={{ fontSize: 12, color: C.muted, fontWeight: 600, display: "block", marginBottom: 4 }}>私人 IG / FB 連結 *</label>
+              <input type="text" value={igThreads} onChange={e => setIgThreads(e.target.value)}
                 style={{ width: "100%", padding: "12px 14px", border: `1.5px solid ${C.border}`, borderRadius: 10, fontSize: 15, boxSizing: "border-box", background: "#fff" }}/>
             </div>
 
