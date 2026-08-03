@@ -437,11 +437,21 @@ async function handleBarePlusOne(event) {
     return;
   }
 
-  const { data: pending } = await supabase
-    .from("pending_images")
-    .select("*")
-    .eq("line_user_id", lineUserId)
-    .maybeSingle();
+  // 圖片跟 +1 可能是兩個幾乎同時到的獨立請求,圖片那邊可能還在處理中
+  // → 查不到就短暫重試幾次,而不是立刻判定失敗
+  let pending = null;
+  const RETRY_DELAYS_MS = [400, 700, 1000]; // 共重試 3 次,累積約 2.1 秒
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+    const { data } = await supabase
+      .from("pending_images")
+      .select("*")
+      .eq("line_user_id", lineUserId)
+      .maybeSingle();
+    if (data) { pending = data; break; }
+    if (attempt < RETRY_DELAYS_MS.length) {
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[attempt]));
+    }
+  }
 
   if (!pending) {
     await replyMessage(replyToken, [
