@@ -750,7 +750,7 @@ function ProductDetailSheet({product,onAdd,onClose,rate,isWholesale=false}){
               return(
                 <button key={o.id} onClick={()=>setSelVariants(p=>({...p,[groupName]:o.label}))}
                   style={{padding:"8px 16px",borderRadius:99,fontSize:13,cursor:"pointer",transition:"all .15s",border:`1.5px solid ${sel?C.accent:C.border}`,background:sel?C.accentBg:"transparent",color:sel?C.accent:C.textMid,fontWeight:sel?500:400}}>
-                  {o.label}{o.price>0?` $${o.price}`:""}
+                  {o.label}
                 </button>
               );
             })}
