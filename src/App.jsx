@@ -686,6 +686,26 @@ function ProductDetailSheet({product,onAdd,onClose,rate,isWholesale=false}){
   }
   const someSelected=Object.keys(selVariants).length>0;
   const allSelected=variantGroups.length===0||variantGroups.every(([g])=>selVariants[g]);
+
+  // 現貨庫存判斷:取目前選中的款式選項裡,庫存最保守(最少)的那個
+  const isInStockProduct = product.supply_type === "instock";
+  let selectedStock = null; // null = 尚未選擇或不適用
+  let selectedVariantIds = [];
+  if (hasVariants) {
+    const selectedOpts=Object.entries(selVariants).map(([g,label])=>{
+      const group=variantGroups.find(([gName])=>gName===g);
+      return group?.[1]?.find(o=>o.label===label);
+    }).filter(Boolean);
+    selectedVariantIds = selectedOpts.map(o=>o.id);
+    if (isInStockProduct && selectedOpts.length>0) {
+      selectedStock = Math.min(...selectedOpts.map(o=>Number(o.stock)||0));
+    }
+  }
+  const outOfStock = isInStockProduct && someSelected && selectedStock !== null && selectedStock <= 0;
+  const maxQty = isInStockProduct && selectedStock !== null ? Math.max(0, selectedStock) : 99;
+
+  // 結單時間判斷:過了結單日當天(23:59:59)就不能再下單
+  const deadlinePassed = !!product.deadline && new Date(`${product.deadline}T23:59:59`).getTime() < Date.now();
   return(
     <div style={{display:"flex",flexDirection:"column",gap:18}}>
       <div style={{background:C.bgDeep,aspectRatio:"4/3",display:"flex",alignItems:"center",justifyContent:"center",borderRadius:18,overflow:"hidden",margin:"0 -22px"}}>
@@ -728,9 +748,11 @@ function ProductDetailSheet({product,onAdd,onClose,rate,isWholesale=false}){
       {(product.deadline || product.expected_arrival) && (
         <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
           {product.deadline && (
-            <div style={{ flex:1, minWidth:130, background:C.bgDeep, borderRadius:C.rSm, padding:"10px 12px", border:`1px solid ${C.borderLight}` }}>
-              <div style={{ fontSize:10, color:C.faint, letterSpacing:.5, marginBottom:3, fontWeight:600 }}>⏰ 結單日期</div>
-              <div style={{ fontSize:13, color:C.text, fontWeight:500 }}>{formatShortDate(product.deadline)}</div>
+            <div style={{ flex:1, minWidth:130, background:deadlinePassed?C.redBg:C.bgDeep, borderRadius:C.rSm, padding:"10px 12px", border:`1px solid ${deadlinePassed?C.red+"40":C.borderLight}` }}>
+              <div style={{ fontSize:10, color:deadlinePassed?C.red:C.faint, letterSpacing:.5, marginBottom:3, fontWeight:600 }}>⏰ 結單日期</div>
+              <div style={{ fontSize:13, color:deadlinePassed?C.red:C.text, fontWeight:deadlinePassed?700:500 }}>
+                {formatShortDate(product.deadline)}{deadlinePassed?"(已結單)":""}
+              </div>
             </div>
           )}
           {product.expected_arrival && (
@@ -747,10 +769,11 @@ function ProductDetailSheet({product,onAdd,onClose,rate,isWholesale=false}){
           <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
             {options.map(o=>{
               const sel=selVariants[groupName]===o.label;
+              const soldOut = isInStockProduct && (Number(o.stock)||0) <= 0;
               return(
-                <button key={o.id} onClick={()=>setSelVariants(p=>({...p,[groupName]:o.label}))}
-                  style={{padding:"8px 16px",borderRadius:99,fontSize:13,cursor:"pointer",transition:"all .15s",border:`1.5px solid ${sel?C.accent:C.border}`,background:sel?C.accentBg:"transparent",color:sel?C.accent:C.textMid,fontWeight:sel?500:400}}>
-                  {o.label}
+                <button key={o.id} disabled={soldOut} onClick={()=>setSelVariants(p=>({...p,[groupName]:o.label}))}
+                  style={{padding:"8px 16px",borderRadius:99,fontSize:13,cursor:soldOut?"not-allowed":"pointer",transition:"all .15s",border:`1.5px solid ${sel?C.accent:C.border}`,background:sel?C.accentBg:"transparent",color:soldOut?C.faint:(sel?C.accent:C.textMid),fontWeight:sel?500:400,opacity:soldOut?.5:1,textDecoration:soldOut?"line-through":"none"}}>
+                  {o.label}{soldOut?"(售完)":""}
                 </button>
               );
             })}
@@ -758,15 +781,22 @@ function ProductDetailSheet({product,onAdd,onClose,rate,isWholesale=false}){
         </div>
       ))}
       <div>
-        <div style={{fontSize:13,fontWeight:500,marginBottom:12,color:C.textMid}}>數量</div>
+        <div style={{fontSize:13,fontWeight:500,marginBottom:12,color:C.textMid,display:"flex",alignItems:"center",gap:8}}>
+          <span>數量</span>
+          {isInStockProduct && selectedStock !== null && (
+            <span style={{fontSize:11,color:selectedStock>0?C.muted:C.red,fontWeight:selectedStock>0?400:600}}>
+              {selectedStock>0?`(剩 ${selectedStock} 件)`:"(已售完)"}
+            </span>
+          )}
+        </div>
         <div style={{display:"flex",alignItems:"center",gap:20}}>
           <button onClick={()=>setQty(q=>Math.max(1,q-1))} style={{width:40,height:40,borderRadius:"50%",background:C.bgDeep,border:`1px solid ${C.border}`,fontSize:20,cursor:"pointer"}}>−</button>
-          <div style={{fontSize:20,fontWeight:600,minWidth:32,textAlign:"center"}}>{qty}</div>
-          <button onClick={()=>setQty(q=>Math.min(99,q+1))} style={{width:40,height:40,borderRadius:"50%",background:C.bgDeep,border:`1px solid ${C.border}`,fontSize:20,cursor:"pointer"}}>+</button>
-          {twdPrice>0&&<div style={{marginLeft:"auto",fontSize:12,color:C.muted}}>小計 <span style={{color:C.accent,fontWeight:600,fontSize:14}}>{fmtMoney(twdPrice*qty)}</span></div>}
+          <div style={{fontSize:20,fontWeight:600,minWidth:32,textAlign:"center"}}>{Math.min(qty,Math.max(1,maxQty||1))}</div>
+          <button onClick={()=>setQty(q=>Math.min(maxQty||99,q+1))} disabled={isInStockProduct&&maxQty<=qty} style={{width:40,height:40,borderRadius:"50%",background:C.bgDeep,border:`1px solid ${C.border}`,fontSize:20,cursor:"pointer",opacity:(isInStockProduct&&maxQty<=qty)?.4:1}}>+</button>
+          {twdPrice>0&&<div style={{marginLeft:"auto",fontSize:12,color:C.muted}}>小計 <span style={{color:C.accent,fontWeight:600,fontSize:14}}>{fmtMoney(twdPrice*Math.min(qty,Math.max(1,maxQty||1)))}</span></div>}
         </div>
       </div>
-      <Btn full disabled={!allSelected} onClick={()=>{
+      <Btn full disabled={!allSelected||outOfStock||deadlinePassed} onClick={()=>{
         const varLabel=Object.entries(selVariants).map(([g,v])=>`${g}:${v}`).join(" / ");
         const itemName=`${sanitize(product.name)}${varLabel?` / ${varLabel}`:""}`;
         const cartId=product.id+JSON.stringify(selVariants);
@@ -781,7 +811,8 @@ function ProductDetailSheet({product,onAdd,onClose,rate,isWholesale=false}){
             selectedCost=Math.max(...selectedOpts.map(o=>Number(o.cost)||0));
           }
         }
-        for(let i=0;i<qty;i++)onAdd({
+        const finalQty = isInStockProduct ? Math.min(qty, Math.max(1, maxQty||1)) : qty;
+        for(let i=0;i<finalQty;i++)onAdd({
           ...product,
           id:cartId,
           name:itemName,
@@ -789,9 +820,12 @@ function ProductDetailSheet({product,onAdd,onClose,rate,isWholesale=false}){
           cost: selectedCost,  // 帶款式成本
           payment_type: product.payment_type || "full",
           deposit_amount: selectedDeposit || 0,
+          product_id: product.id,
+          variant_ids: selectedVariantIds,
+          supply_type: product.supply_type || "presale",
         });
         onClose();
-      }}>{!allSelected?"請選擇規格":"加入購物車"}</Btn>
+      }}>{deadlinePassed?"已結單":!allSelected?"請選擇規格":outOfStock?"已售完":"加入購物車"}</Btn>
     </div>
   );
 }
@@ -923,8 +957,10 @@ function CatalogTab({products,inStock,rate,cart,onAdd,showCart,setShowCart,updat
   };
 
   const inCart=id=>cart.find(c=>c.id===id);
-  const activeProducts=products.filter(p=>p.status==="on");
-  const activeInStock=(inStock||[]).filter(i=>i.status==="on");
+  // 現貨商品:舊的 in_stock 表 + 新的 products 表裡標記為現貨的商品,合併顯示
+  const activeProducts=products.filter(p=>p.status==="on"&&p.supply_type!=="instock");
+  const activeInStockNew=products.filter(p=>p.status==="on"&&p.supply_type==="instock");
+  const activeInStock=[...(inStock||[]).filter(i=>i.status==="on"), ...activeInStockNew];
   const categories=["全部",...Array.from(new Set(activeProducts.map(p=>p.category).filter(Boolean)))];
   const filtered=activeProducts.filter(p=>activeCategory==="全部"||p.category===activeCategory).filter(p=>!search||sanitize(p.name).includes(search)||sanitize(p.category||"").includes(search));
 
@@ -935,12 +971,19 @@ function CatalogTab({products,inStock,rate,cart,onAdd,showCart,setShowCart,updat
     const variantPrices=(p.variants||[]).map(v=>getPrice(v)).filter(x=>x>0);
     const minPrice=variantPrices.length?Math.min(...variantPrices):0;
     const hasMultiple=variantPrices.length>1&&Math.max(...variantPrices)>minPrice;
+    // 現貨商品:若所有款式庫存都是 0,視為售完
+    const soldOut = isInStock && p.supply_type==="instock" && (p.variants||[]).length>0 && (p.variants||[]).every(v=>(Number(v.stock)||0)<=0);
+    // 預購商品:結單日已過,不能再下單
+    const deadlinePassed = !isInStock && !!p.deadline && new Date(`${p.deadline}T23:59:59`).getTime() < Date.now();
+    const blocked = soldOut || deadlinePassed;
     return(
-      <div className="fadeUp" style={{animationDelay:`${idx*.03}s`,background:C.bgCard,borderRadius:16,overflow:"hidden",cursor:"pointer",border:`1px solid ${C.borderLight}`,boxShadow:C.shadow}} onClick={()=>isInStock?setSelectedInStock(p):setSelected(p)}>
+      <div className="fadeUp" style={{animationDelay:`${idx*.03}s`,background:C.bgCard,borderRadius:16,overflow:"hidden",cursor:blocked?"default":"pointer",border:`1px solid ${C.borderLight}`,boxShadow:C.shadow,opacity:blocked?.55:1}} onClick={()=>{if(blocked)return; isInStock?setSelectedInStock(p):setSelected(p);}}>
         <div style={{background:C.bgDeep,aspectRatio:"1/1",display:"flex",alignItems:"center",justifyContent:"center",position:"relative",overflow:"hidden"}}>
           {p.image?.startsWith("data:")||p.image?.startsWith("http")?<img src={p.image} alt={p.name} style={{width:"100%",height:"100%",objectFit:"cover"}} onError={e=>e.target.style.display="none"}/>:<span style={{fontSize:36}}>{p.image||"🛒"}</span>}
           {isInStock&&<span style={{position:"absolute",top:8,left:8,background:C.green,color:"#fff",fontSize:9,padding:"2px 7px",borderRadius:99,fontWeight:600,letterSpacing:.3}}>現貨</span>}
-          {qtyInCart&&<span style={{position:"absolute",top:8,right:8,background:C.accent,color:"#fff",fontSize:10,width:20,height:20,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>{qtyInCart}</span>}
+          {soldOut&&<span style={{position:"absolute",inset:0,background:"rgba(44,31,23,.45)",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:14,fontWeight:700,letterSpacing:1}}>已售完</span>}
+          {deadlinePassed&&<span style={{position:"absolute",inset:0,background:"rgba(44,31,23,.45)",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:14,fontWeight:700,letterSpacing:1}}>已結單</span>}
+          {!blocked&&qtyInCart&&<span style={{position:"absolute",top:8,right:8,background:C.accent,color:"#fff",fontSize:10,width:20,height:20,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>{qtyInCart}</span>}
         </div>
         <div style={{padding:"10px 12px 12px"}}>
           <div style={{fontSize:10,color:C.faint,marginBottom:3,letterSpacing:.3}}>{sanitize(p.category||"")}</div>
@@ -1915,6 +1958,9 @@ function MainApp({lineUser,data,setData}){
       image:c.image||"",
       payment_type: c.payment_type || "full",
       deposit_amount: Number(c.deposit_amount) || 0,
+      supply_type: c.supply_type || "presale",
+      product_id: c.product_id || null,
+      variant_ids: Array.isArray(c.variant_ids) ? c.variant_ids : [],
     }));
     const total=items.reduce((s,c)=>s+c.price*c.qty,0);
     const totalCost=items.reduce((s,c)=>s+c.cost*c.qty,0);
@@ -1938,9 +1984,26 @@ function MainApp({lineUser,data,setData}){
       wholesale_no: sanitize(member?.wholesale_no || "", 30),
       created_at:new Date().toISOString(),
     };
+
+    // 現貨商品扣庫存(下單當下就扣,不等出貨)
+    const deductInStockQty = async () => {
+      const instockItems = items.filter(it => it.supply_type === "instock" && it.product_id && it.variant_ids?.length);
+      for (const it of instockItems) {
+        try {
+          const { data: prod } = await supabase.from("products").select("id, variants").eq("id", it.product_id).maybeSingle();
+          if (!prod) continue;
+          const newVariants = (prod.variants || []).map(v =>
+            it.variant_ids.includes(v.id) ? { ...v, stock: Math.max(0, (Number(v.stock) || 0) - it.qty) } : v
+          );
+          await supabase.from("products").update({ variants: newVariants }).eq("id", it.product_id);
+        } catch (e) { console.warn("扣現貨庫存失敗:", e); }
+      }
+    };
+
     try{
       const{data:saved,error}=await supabase.from("orders").insert([orderData]).select().single();
       if(error)throw error;
+      await deductInStockQty();
       setData(d=>({...d,orders:[saved,...d.orders]}));
       setCart([]);setShowCart(false);setTab("orders");
       setToast(payInfo.payAmount>0?`訂單已送出 · 已記錄匯款 NT$${payInfo.payAmount} 🌸`:"訂單已送出 🌸");
@@ -1951,6 +2014,7 @@ function MainApp({lineUser,data,setData}){
         const{deposit_amount,deposit_last5,deposit_bank,deposit_paid,delivery_method,recipient_phone,store_code,store_name,store_address,is_wholesale,wholesale_no,...rest}=orderData;
         const{data:saved2,error:e2}=await supabase.from("orders").insert([rest]).select().single();
         if(!e2){
+          await deductInStockQty();
           setData(d=>({...d,orders:[saved2,...d.orders]}));
           setCart([]);setShowCart(false);setTab("orders");
           setToast("訂單已送出(匯款資訊未存,請聯繫業者)");
