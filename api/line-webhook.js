@@ -694,6 +694,49 @@ export default async function handler(req, res) {
     const body = JSON.parse(rawBody);
     const events = body.events || [];
 
+// ── 客人自助綁定社群名稱:「綁定 小明」 ──────────────────────
+function parseBindCommand(text) {
+  const m = text.trim().match(/^綁定\s*(.+)$/);
+  if (!m) return null;
+  const name = m[1].trim();
+  if (!name) return null;
+  return { name };
+}
+
+async function handleBindCommunityName(event, bind) {
+  const replyToken = event.replyToken;
+  const lineUserId = event.source.userId;
+
+  const { data: member } = await supabase
+    .from("members")
+    .select("line_user_id, username, community_name")
+    .eq("line_user_id", lineUserId)
+    .maybeSingle();
+
+  if (!member || !member.username) {
+    await replyMessage(replyToken, [buildBindMemberFlex()]);
+    return;
+  }
+
+  const newName = bind.name.slice(0, 50);
+  const { error } = await supabase
+    .from("members")
+    .update({ community_name: newName })
+    .eq("line_user_id", lineUserId);
+
+  if (error) {
+    console.error("綁定社群名稱失敗:", error);
+    await replyMessage(replyToken, [
+      { type: "text", text: `更新失敗,請稍後再試 🙏\n\n${CONTACT_TEXT}` },
+    ]);
+    return;
+  }
+
+  await replyMessage(replyToken, [
+    { type: "text", text: `✅ 社群名稱已更新為「${newName}」` },
+  ]);
+}
+
     for (const event of events) {
       if (event.type !== "message") continue;
 
@@ -725,6 +768,18 @@ export default async function handler(req, res) {
           }
           continue;
         }
+      }
+
+      // 客人自助綁定/修改社群名稱 —— 「綁定 小明」
+      const bind = parseBindCommand(trimmed);
+      if (bind) {
+        try {
+          await handleBindCommunityName(event, bind);
+        } catch (err) {
+          console.error("handleBindCommunityName 錯誤:", err);
+          await replyMessage(replyToken, [{ type: "text", text: "處理時發生錯誤,請稍後再試" }]);
+        }
+        continue;
       }
 
       // 裸 +1(前面沒帶商品名稱/編號)→ 檢查是否有剛傳的圖片,建立許願清單
