@@ -838,75 +838,6 @@ function CatalogTab({products,inStock,rate,cart,onAdd,showCart,setShowCart,updat
   const [showManual,setShowManual]=useState(false);
   const [mName,setMName]=useState("");
   const [mPrice,setMPrice]=useState("");
-  const [payAmount,setPayAmount]=useState("");
-  const [payLast5,setPayLast5]=useState("");
-  const [payBank,setPayBank]=useState("");
-
-  // 兩步式結帳
-  const [checkoutStep,setCheckoutStep]=useState("cart"); // cart | checkout
-  const [deliveryMethod,setDeliveryMethod]=useState("shopee"); // shopee=賣貨便, meetup=面交, delivery=宅配
-  const [recipientPhone,setRecipientPhone]=useState("");
-  const [selectedStore,setSelectedStore]=useState(null); // {code, name, address}
-
-  // 進結帳頁時,如果客人已有電話就預填
-  useEffect(() => {
-    if (checkoutStep === "checkout" && memberPhone && !recipientPhone) {
-      setRecipientPhone(memberPhone);
-    }
-  }, [checkoutStep, memberPhone]);
-
-  // 從 URL 讀取 EMap 選門市回傳的參數
-  useEffect(() => {
-    try {
-      const params = new URLSearchParams(window.location.search);
-      // 7-11 賣貨便 EMap 回傳參數(可能大寫或小寫)
-      const stCode = params.get("stCode") || params.get("storeid") || params.get("CVSStoreID");
-      const stName = params.get("stName") || params.get("storename") || params.get("CVSStoreName");
-      const stAddr = params.get("stAddr") || params.get("storeaddress") || params.get("CVSAddress");
-      if (stCode && stName) {
-        setSelectedStore({
-          code: stCode,
-          name: decodeURIComponent(stName),
-          address: stAddr ? decodeURIComponent(stAddr) : "",
-        });
-        // 恢復表單狀態
-        try {
-          const saved = sessionStorage.getItem("checkoutState");
-          if (saved) {
-            const s = JSON.parse(saved);
-            if (s.payBank) setPayBank(s.payBank);
-            if (s.payAmount) setPayAmount(s.payAmount);
-            if (s.payLast5) setPayLast5(s.payLast5);
-            if (s.recipientPhone) setRecipientPhone(s.recipientPhone);
-            if (s.deliveryMethod) setDeliveryMethod(s.deliveryMethod);
-            sessionStorage.removeItem("checkoutState");
-          }
-        } catch (e) { console.warn("恢復表單失敗:", e); }
-        setShowCart(true);
-        setCheckoutStep("checkout");
-        // 清掉 URL 參數,避免重進又跳出
-        const url = new URL(window.location);
-        ["stCode","stName","stAddr","storeid","storename","storeaddress","CVSStoreID","CVSStoreName","CVSAddress"].forEach(k=>url.searchParams.delete(k));
-        window.history.replaceState({}, "", url);
-      }
-    } catch (e) { console.warn("解析 EMap 回傳失敗:", e); }
-  }, []);
-
-  // 開啟 EMap 選門市
-  const openEMap = () => {
-    // 先儲存目前表單狀態
-    try {
-      sessionStorage.setItem("checkoutState", JSON.stringify({
-        payBank, payAmount, payLast5, recipientPhone, deliveryMethod,
-      }));
-    } catch (e) { console.warn("儲存表單失敗:", e); }
-
-    // 建立回傳網址(用 API endpoint 接收 POST,轉成 GET redirect)
-    const returnUrl = window.location.origin + "/api/store-callback";
-    // 7-11 賣貨便 EMap 公用版本
-    const emapUrl = `https://emap.presco.com.tw/c2cemap.ashx?eshopid=870&servicetype=1&url=${encodeURIComponent(returnUrl)}`;
-    window.location.href = emapUrl;
-  };
 
   // 從 URL 讀 ?product=xxx 自動打開該商品(可再帶 ?variant=xxx 預選款式)
   useEffect(()=>{
@@ -931,29 +862,7 @@ function CatalogTab({products,inStock,rate,cart,onAdd,showCart,setShowCart,updat
   }, [products]);
 
   const doSubmit=()=>{
-    // 驗證取貨方式細節
-    if (deliveryMethod === "shopee" && !selectedStore) { alert("請選擇 7-11 取貨門市"); return; }
-    // 驗證匯款資訊必填
-    if (!recipientPhone || recipientPhone.replace(/\D/g,"").length < 8) { alert("請填寫收件人電話"); return; }
-    if (!payBank) { alert("請選擇匯款銀行"); return; }
-    if (!payAmount || Number(payAmount) <= 0) { alert("請填寫匯款金額"); return; }
-    if (!payLast5 || payLast5.length !== 5) { alert("請填寫完整 5 碼帳號末碼"); return; }
-    submitOrder({
-      payAmount: Number(payAmount) || 0,
-      payLast5: payLast5 || "",
-      payBank: payBank || "",
-      deliveryMethod: deliveryMethod || "shopee",
-      recipientPhone: recipientPhone || "",
-      storeCode: selectedStore?.code || "",
-      storeName: selectedStore?.name || "",
-      storeAddress: selectedStore?.address || "",
-    });
-    setPayAmount("");
-    setPayLast5("");
-    setPayBank("");
-    setRecipientPhone("");
-    setSelectedStore(null);
-    setCheckoutStep("cart");
+    submitOrder({});
   };
 
   const inCart=id=>cart.find(c=>c.id===id);
@@ -1071,7 +980,7 @@ function CatalogTab({products,inStock,rate,cart,onAdd,showCart,setShowCart,updat
       </Sheet>
 
       {/* 購物車 Sheet */}
-      <Sheet open={showCart} onClose={()=>{setShowCart(false);setCheckoutStep("cart");}} title={checkoutStep === "checkout" ? "填寫結帳資訊" : "購物車"}>
+      <Sheet open={showCart} onClose={()=>setShowCart(false)} title="購物車">
         <div style={{display:"flex",flexDirection:"column"}}>
           {cart.length===0
             ?<div style={{textAlign:"center",padding:"40px 0",color:C.faint}}>購物車是空的</div>
@@ -1174,117 +1083,8 @@ function CatalogTab({products,inStock,rate,cart,onAdd,showCart,setShowCart,updat
                 );
               })()}
 
-              {checkoutStep === "cart" && (
-                <>
-                  <Btn full onClick={() => setCheckoutStep("checkout")}>下一步:填寫結帳資訊 →</Btn>
-                  <div style={{fontSize:11,color:C.faint,textAlign:"center",marginTop:12,lineHeight:1.8}}>下一步將填寫取貨方式和匯款資訊</div>
-                </>
-              )}
-
-              {checkoutStep === "checkout" && (
-                <>
-                  {/* 取貨方式 */}
-                  <div style={{background:C.bgDeep,borderRadius:C.rSm,padding:"14px 16px",marginBottom:12,border:`1px solid ${C.border}`}}>
-                    <div style={{fontSize:11,color:C.muted,marginBottom:10,letterSpacing:.5,fontWeight:600}}>📦 取貨方式</div>
-                    <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:deliveryMethod==="shopee"?12:0}}>
-                      {[
-                        {v:"shopee",l:"賣貨便"},
-                        {v:"meetup",l:"面交"},
-                        {v:"delivery",l:"宅配"},
-                      ].map(opt => (
-                        <button key={opt.v} onClick={()=>setDeliveryMethod(opt.v)}
-                          style={{flex:1,minWidth:80,padding:"9px 12px",borderRadius:99,border:`1.5px solid ${deliveryMethod===opt.v?C.accent:C.border}`,background:deliveryMethod===opt.v?C.accentBg:"#fff",color:deliveryMethod===opt.v?C.accent:C.textMid,fontSize:13,fontWeight:deliveryMethod===opt.v?600:400,cursor:"pointer"}}>
-                          {opt.l}
-                        </button>
-                      ))}
-                    </div>
-                    {/* 賣貨便:選門市 */}
-                    {deliveryMethod === "shopee" && (
-                      <>
-                        {selectedStore ? (
-                          <div style={{background:"#fff",borderRadius:8,padding:"10px 12px",border:`1px solid ${C.border}`}}>
-                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
-                              <div style={{flex:1,minWidth:0}}>
-                                <div style={{fontSize:11,color:C.muted,marginBottom:3}}>已選擇取貨門市</div>
-                                <div style={{fontSize:13,fontWeight:600,color:C.accentDark}}>
-                                  🏪 {selectedStore.name}
-                                  <span style={{fontSize:10,color:C.muted,marginLeft:6,fontWeight:400}}>#{selectedStore.code}</span>
-                                </div>
-                                {selectedStore.address && (
-                                  <div style={{fontSize:11,color:C.muted,marginTop:3,lineHeight:1.4}}>{selectedStore.address}</div>
-                                )}
-                              </div>
-                              <button onClick={openEMap}
-                                style={{background:"transparent",color:C.accent,border:`1px solid ${C.accent}`,padding:"5px 10px",borderRadius:6,fontSize:11,fontWeight:500,cursor:"pointer",flexShrink:0}}>
-                                重選
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          <button onClick={openEMap}
-                            style={{width:"100%",background:C.accent,color:"#fff",border:"none",padding:"10px",borderRadius:8,fontSize:13,fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:6}}>
-                            🗺 選擇 7-11 取貨門市
-                          </button>
-                        )}
-                        <div style={{fontSize:10,color:C.muted,marginTop:6,lineHeight:1.6}}>
-                          點選後將跳轉至統一超商門市地圖,選好門市自動跳回
-                        </div>
-                      </>
-                    )}
-                  </div>
-
-                  {/* 收件人電話 */}
-                  <div style={{background:C.bgDeep,borderRadius:C.rSm,padding:"14px 16px",marginBottom:12,border:`1px solid ${C.border}`}}>
-                    <div style={{fontSize:11,color:C.muted,marginBottom:8,letterSpacing:.5,fontWeight:600}}>📞 收件人電話 <span style={{color:C.accent,fontWeight:400}}>(必填)</span></div>
-                    <input type="tel" inputMode="tel" value={recipientPhone} onChange={e=>setRecipientPhone(e.target.value.replace(/[^\d\-]/g,""))}
-                      placeholder="例如:0912-345-678"
-                      style={{width:"100%",padding:"9px 12px",border:`1px solid ${recipientPhone.length>=8?C.border:C.accent}`,borderRadius:8,fontSize:14,boxSizing:"border-box",background:"#fff",color:C.text}}/>
-                  </div>
-
-                  {/* 匯款資訊 */}
-                  <div style={{background:C.bgDeep,borderRadius:C.rSm,padding:"14px 16px",marginBottom:12,border:`1px solid ${C.border}`}}>
-                    <div style={{fontSize:11,color:C.muted,marginBottom:10,letterSpacing:.5,fontWeight:600}}>💰 匯款資訊 <span style={{color:C.accent,fontWeight:400}}>(必填)</span></div>
-                    <div style={{display:"flex",flexDirection:"column",gap:10}}>
-                      <div>
-                        <label style={{fontSize:11,color:C.textMid,display:"block",marginBottom:4}}>付款銀行 *</label>
-                        <select value={payBank} onChange={e=>setPayBank(e.target.value)}
-                          style={{width:"100%",padding:"9px 12px",border:`1px solid ${payBank?C.border:C.accent}`,borderRadius:8,fontSize:14,boxSizing:"border-box",background:"#fff",color:payBank?C.text:C.muted,cursor:"pointer",WebkitAppearance:"none",appearance:"none",backgroundImage:`url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2'><path d='M6 9l6 6 6-6'/></svg>")`,backgroundRepeat:"no-repeat",backgroundPosition:"right 12px center",backgroundSize:"14px",paddingRight:36}}>
-                          <option value="">請選擇銀行</option>
-                          {TW_BANKS.map(b => (
-                            <option key={b.code} value={`${b.code} ${b.name}`}>{b.code} {b.name}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div>
-                        <label style={{fontSize:11,color:C.textMid,display:"block",marginBottom:4}}>匯款金額 NT$ *</label>
-                        <input type="number" inputMode="numeric" value={payAmount} onChange={e=>setPayAmount(e.target.value)}
-                          placeholder="例如:500"
-                          style={{width:"100%",padding:"9px 12px",border:`1px solid ${payAmount?C.border:C.accent}`,borderRadius:8,fontSize:14,boxSizing:"border-box",background:"#fff",color:C.text}}/>
-                      </div>
-                      <div>
-                        <label style={{fontSize:11,color:C.textMid,display:"block",marginBottom:4}}>匯款帳號末 5 碼 *</label>
-                        <input type="text" inputMode="numeric" maxLength={5} value={payLast5} onChange={e=>setPayLast5(e.target.value.replace(/\D/g,"").slice(0,5))}
-                          placeholder="例如:12345"
-                          style={{width:"100%",padding:"9px 12px",border:`1px solid ${payLast5.length===5?C.border:C.accent}`,borderRadius:8,fontSize:14,boxSizing:"border-box",background:"#fff",color:C.text,letterSpacing:2}}/>
-                      </div>
-                      <div style={{fontSize:10,color:C.accent,lineHeight:1.6,padding:"8px 10px",background:C.accentBg,borderRadius:6}}>
-                        ⚠️ 若下單後 {autoCancelHours} 小時內業者未收到匯款資訊,系統將自動取消訂單。
-                      </div>
-                    </div>
-                  </div>
-
-                  <div style={{display:"flex",gap:8}}>
-                    <button onClick={()=>setCheckoutStep("cart")}
-                      style={{flex:1,padding:"12px",border:`1.5px solid ${C.border}`,background:"#fff",color:C.textMid,fontSize:14,borderRadius:12,cursor:"pointer"}}>
-                      ← 返回購物車
-                    </button>
-                    <div style={{flex:2}}>
-                      <Btn full onClick={doSubmit}>確認送出訂單</Btn>
-                    </div>
-                  </div>
-                  <div style={{fontSize:11,color:C.faint,textAlign:"center",marginTop:12,lineHeight:1.8}}>送出後業者確認並與您聯繫<br/>代購最終價格以業者報價為準</div>
-                </>
-              )}
+              <Btn full onClick={doSubmit}>送出訂單</Btn>
+              <div style={{fontSize:11,color:C.faint,textAlign:"center",marginTop:12,lineHeight:1.8}}>送出後業者確認並與您聯繫<br/>代購最終價格以業者報價為準</div>
             </>
           }
         </div>
