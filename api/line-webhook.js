@@ -513,7 +513,7 @@ async function handleBarePlusOne(event) {
 
   // 建立「待報價」紀錄,並推播通知業者(機器人設定者)
   try {
-    await supabase.from("pending_quotes").insert([
+    const { error: pqError } = await supabase.from("pending_quotes").insert([
       {
         id: secureUid(),
         order_id: orderData.id,
@@ -524,9 +524,13 @@ async function handleBarePlusOne(event) {
         created_at: new Date().toISOString(),
       },
     ]);
-    await pushMessage(OWNER_LINE_USER_ID, [
-      buildOwnerNotifyFlex({ customerName, imageUrl: pending.image_url }),
-    ]);
+    if (pqError) {
+      console.error("寫入 pending_quotes 失敗:", pqError.message || pqError);
+    } else {
+      await pushMessage(OWNER_LINE_USER_ID, [
+        buildOwnerNotifyFlex({ customerName, imageUrl: pending.image_url }),
+      ]);
+    }
   } catch (err) {
     console.error("通知業者失敗:", err);
   }
