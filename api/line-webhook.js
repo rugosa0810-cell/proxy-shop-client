@@ -312,18 +312,18 @@ function buildWishCreatedFlex(imageUrl) {
       layout: "vertical",
       spacing: "md",
       contents: [
-        { type: "text", text: "✅ 已建立許願", weight: "bold", size: "lg", color: "#a8847e" },
-        { type: "text", text: "我們會盡快為您報價,報價後可直接於「許願清單」加入購物車下單", size: "sm", color: "#888888", wrap: true },
+        { type: "text", text: "✅ 訂單已建立", weight: "bold", size: "lg", color: "#a8847e" },
+        { type: "text", text: "我們會盡快為您報價,報價後會直接更新這筆訂單,不需要再操作", size: "sm", color: "#888888", wrap: true },
       ],
     },
   };
   if (validImageUrl(imageUrl)) {
     bubble.hero = { type: "image", url: imageUrl, size: "full", aspectRatio: "20:13", aspectMode: "cover" };
   }
-  return { type: "flex", altText: "已建立許願", contents: bubble };
+  return { type: "flex", altText: "訂單已建立", contents: bubble };
 }
 
-// 6. 通知業者(Owner)有新的圖片許願待報價
+// 6. 通知業者(Owner)有新的訂單待報價(客人傳圖 +1 直接建立,價格待補)
 function buildOwnerNotifyFlex({ customerName, imageUrl }) {
   const bubble = {
     type: "bubble",
@@ -332,22 +332,22 @@ function buildOwnerNotifyFlex({ customerName, imageUrl }) {
       layout: "vertical",
       spacing: "md",
       contents: [
-        { type: "text", text: "📥 新的許願待報價", weight: "bold", size: "lg", color: "#a8847e" },
+        { type: "text", text: "📥 新訂單待報價", weight: "bold", size: "lg", color: "#a8847e" },
         { type: "text", text: `客人:${customerName}`, size: "sm", color: "#888888" },
         { type: "separator", margin: "md" },
-        { type: "text", text: "回覆「品名+價格」即可完成設定,例如「東京限定娃娃+850」,客人會立即收到通知並可下單", size: "sm", wrap: true, margin: "md" },
+        { type: "text", text: "回覆「品名+價格」即可完成設定,例如「東京限定娃娃+850」,會直接更新這筆訂單並通知客人", size: "sm", wrap: true, margin: "md" },
       ],
     },
   };
   if (validImageUrl(imageUrl)) {
     bubble.hero = { type: "image", url: imageUrl, size: "full", aspectRatio: "20:13", aspectMode: "cover" };
   }
-  return { type: "flex", altText: `新的許願待報價 · ${customerName}`, contents: bubble };
+  return { type: "flex", altText: `新訂單待報價 · ${customerName}`, contents: bubble };
 }
 
 // 7. 通知客人:報價完成,點擊即可下單
-function buildCustomerOrderFlex({ imageUrl, price, wishId, itemName }) {
-  const orderUrl = `${CUSTOMER_LIFF_URL}?wish=${encodeURIComponent(wishId)}`;
+function buildCustomerOrderFlex({ imageUrl, price, orderNo, itemName }) {
+  const myOrdersUrl = `${CUSTOMER_LIFF_URL}`;
   const bubble = {
     type: "bubble",
     body: {
@@ -355,23 +355,25 @@ function buildCustomerOrderFlex({ imageUrl, price, wishId, itemName }) {
       layout: "vertical",
       spacing: "md",
       contents: [
-        { type: "text", text: "🎉 已完成報價", weight: "bold", size: "lg", color: "#a8847e" },
-        { type: "text", text: itemName || "您許願的商品", size: "md", weight: "bold", wrap: true },
+        { type: "text", text: "🎉 訂單已完成報價", weight: "bold", size: "lg", color: "#a8847e" },
+        { type: "text", text: itemName || "您的訂單", size: "md", weight: "bold", wrap: true },
         { type: "text", text: `NT$ ${Number(price || 0).toLocaleString()}`, size: "xl", weight: "bold", color: "#a8847e" },
+        { type: "text", text: `訂單編號 #${orderNo || ""}`, size: "sm", color: "#888888" },
+        { type: "text", text: "訂單已經建立好囉,業者會盡快與您聯繫確認取貨與付款方式,不用再操作", size: "sm", wrap: true, margin: "md" },
       ],
     },
     footer: {
       type: "box",
       layout: "vertical",
       contents: [
-        { type: "button", style: "primary", action: { type: "uri", label: "點我下單", uri: orderUrl } },
+        { type: "button", style: "primary", action: { type: "uri", label: "查看我的訂單", uri: myOrdersUrl } },
       ],
     },
   };
   if (validImageUrl(imageUrl)) {
     bubble.hero = { type: "image", url: imageUrl, size: "full", aspectRatio: "20:13", aspectMode: "cover" };
   }
-  return { type: "flex", altText: "已完成報價,點我下單", contents: bubble };
+  return { type: "flex", altText: "訂單已完成報價", contents: bubble };
 }
 
 // 下載 LINE 傳來的圖片(回傳 Buffer)
@@ -473,22 +475,36 @@ async function handleBarePlusOne(event) {
     return;
   }
 
-  const wishData = {
+  const customerName = member.community_name || member.line_name || member.name || "LINE 客人";
+  const orderData = {
     id: secureUid(),
+    no: String(100000 + Math.floor(Math.random() * 900000)),
     customer_line_id: lineUserId,
-    customer_name: member.community_name || member.line_name || member.name || "LINE 客人",
-    name: "客人傳圖許願",
-    note: "透過 LINE Bot 傳圖 +1 建立",
-    img_url: pending.image_url,
-    link: "",
-    status: "searching",
+    customer_name: customerName,
+    status: "pending_review",
+    items: [
+      {
+        name: "待業者命名(LINE 傳圖建立)",
+        qty: 1,
+        price: 0,
+        cost: 0,
+        image: pending.image_url,
+        payment_type: "full",
+        deposit_amount: 0,
+        supply_type: "presale",
+        product_id: null,
+        variant_ids: [],
+      },
+    ],
+    total: 0,
+    profit: 0,
     created_at: new Date().toISOString(),
   };
 
-  const { error } = await supabase.from("wishlist").insert([wishData]);
+  const { error } = await supabase.from("orders").insert([orderData]);
 
   if (error) {
-    console.error("建立許願失敗:", error);
+    console.error("建立訂單失敗:", error);
     await replyMessage(replyToken, [
       { type: "text", text: `建立失敗,請稍後再試一次 🙏\n\n${CONTACT_TEXT}` },
     ]);
@@ -500,16 +516,16 @@ async function handleBarePlusOne(event) {
     await supabase.from("pending_quotes").insert([
       {
         id: secureUid(),
-        wish_id: wishData.id,
+        order_id: orderData.id,
         customer_line_id: lineUserId,
-        customer_name: wishData.customer_name,
+        customer_name: customerName,
         image_url: pending.image_url,
         quoted: false,
         created_at: new Date().toISOString(),
       },
     ]);
     await pushMessage(OWNER_LINE_USER_ID, [
-      buildOwnerNotifyFlex({ customerName: wishData.customer_name, imageUrl: pending.image_url }),
+      buildOwnerNotifyFlex({ customerName, imageUrl: pending.image_url }),
     ]);
   } catch (err) {
     console.error("通知業者失敗:", err);
@@ -544,13 +560,33 @@ async function handleOwnerQuote(event, quote) {
     .maybeSingle();
 
   if (!pendingQuote) {
-    await replyMessage(replyToken, [{ type: "text", text: "目前沒有待報價的許願項目 📭" }]);
+    await replyMessage(replyToken, [{ type: "text", text: "目前沒有待報價的訂單 📭" }]);
     return;
   }
 
-  const updatePatch = { status: "found", price: quote.price, name: quote.name };
+  const { data: order } = await supabase
+    .from("orders")
+    .select("*")
+    .eq("id", pendingQuote.order_id)
+    .maybeSingle();
 
-  const { error } = await supabase.from("wishlist").update(updatePatch).eq("id", pendingQuote.wish_id);
+  if (!order) {
+    console.error("找不到對應訂單:", pendingQuote.order_id);
+    await replyMessage(replyToken, [{ type: "text", text: "找不到對應訂單,可能已被刪除" }]);
+    await supabase.from("pending_quotes").update({ quoted: true }).eq("id", pendingQuote.id);
+    return;
+  }
+
+  const newItems = (order.items || []).map((it, idx) =>
+    idx === 0 ? { ...it, name: quote.name, price: quote.price } : it
+  );
+  const newTotal = newItems.reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.qty) || 1), 0);
+
+  const { error } = await supabase
+    .from("orders")
+    .update({ items: newItems, total: newTotal, status: "pending", updated_at: new Date().toISOString() })
+    .eq("id", order.id);
+
   if (error) {
     console.error("報價寫入失敗:", error);
     await replyMessage(replyToken, [{ type: "text", text: `報價失敗:${error.message}` }]);
@@ -560,16 +596,16 @@ async function handleOwnerQuote(event, quote) {
   await supabase.from("pending_quotes").update({ quoted: true }).eq("id", pendingQuote.id);
 
   await replyMessage(replyToken, [
-    { type: "text", text: `✅ 已為「${pendingQuote.customer_name}」報價\n品名:${quote.name}\n價格:NT$${quote.price}` },
+    { type: "text", text: `✅ 已為「${pendingQuote.customer_name}」的訂單報價\n品名:${quote.name}\n價格:NT$${quote.price}\n訂單編號:#${order.no}` },
   ]);
 
-  // 通知客人:報價已完成,推播可點擊下單的卡片
+  // 通知客人:訂單已完成報價,不用再操作,直接等業者聯繫
   try {
     await pushMessage(pendingQuote.customer_line_id, [
       buildCustomerOrderFlex({
         imageUrl: pendingQuote.image_url,
         price: quote.price,
-        wishId: pendingQuote.wish_id,
+        orderNo: order.no,
         itemName: quote.name,
       }),
     ]);
