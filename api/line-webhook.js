@@ -422,7 +422,7 @@ async function handleImageMessage(event) {
 }
 
 // ── 處理裸「+1」:把剛才暫存的圖片變成許願清單項目 ──────────
-const PENDING_IMAGE_TTL_MS = 10 * 60 * 1000; // 10 分鐘內有效
+const PENDING_IMAGE_TTL_MS = 30 * 60 * 1000; // 30 分鐘內有效
 
 async function handleBarePlusOne(event) {
   const replyToken = event.replyToken;
@@ -463,14 +463,28 @@ async function handleBarePlusOne(event) {
   }
 
   const ageMs = Date.now() - new Date(pending.created_at).getTime();
+
+  if (ageMs > PENDING_IMAGE_TTL_MS) {
+    // 診斷用:把原始時間戳記印出來,方便判斷是「真的拖太久」還是「時間戳記本身有問題」
+    console.error("圖片逾時診斷:", {
+      lineUserId,
+      pending_created_at: pending.created_at,
+      server_now: new Date().toISOString(),
+      ageMs,
+      ageMinutes: Math.round(ageMs / 60000),
+      image_path: pending.image_path,
+    });
+  }
+
   await supabase.from("pending_images").delete().eq("line_user_id", lineUserId);
 
   if (ageMs > PENDING_IMAGE_TTL_MS) {
     if (pending.image_path) {
       await supabase.storage.from("product-images").remove([pending.image_path]).catch(() => {});
     }
+    const minutesAgo = Math.round(ageMs / 60000);
     await replyMessage(replyToken, [
-      { type: "text", text: `圖片已逾時失效(超過 10 分鐘),請重新傳一次圖片再打 +1 📷` },
+      { type: "text", text: `圖片已逾時失效(距離傳圖已經過了約 ${minutesAgo} 分鐘,超過 30 分鐘的圖片會自動失效),請重新傳一次圖片再打 +1 📷` },
     ]);
     return;
   }
