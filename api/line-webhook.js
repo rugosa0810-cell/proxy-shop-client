@@ -480,9 +480,6 @@ async function handleImageMessage(event) {
   }
 }
 
-// ── 處理裸「+1」:把剛才暫存的圖片變成許願清單項目 ──────────
-const PENDING_IMAGE_TTL_MS = 30 * 60 * 1000; // 30 分鐘內有效
-
 // ── 處理客人點擊「下單」或「許願」按鈕 ──────────────────────
 const PENDING_IMAGE_TTL_MS = 30 * 60 * 1000; // 30 分鐘內有效
 
