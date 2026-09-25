@@ -379,7 +379,7 @@ function buildImageActionFlex(imageUrl) {
 }
 
 // 6. 通知業者(Owner)有新的訂單待報價(客人傳圖 +1 直接建立,價格待補)
-function buildOwnerNotifyFlex({ customerName, imageUrl }) {
+function buildOwnerNotifyFlex({ customerName, imageUrl, orderNo }) {
   const bubble = {
     type: "bubble",
     body: {
@@ -388,16 +388,19 @@ function buildOwnerNotifyFlex({ customerName, imageUrl }) {
       spacing: "md",
       contents: [
         { type: "text", text: "📥 新訂單待報價", weight: "bold", size: "lg", color: "#a8847e" },
+        { type: "text", text: `訂單編號:#${orderNo}`, size: "md", weight: "bold", color: "#a8847e" },
         { type: "text", text: `客人:${customerName}`, size: "sm", color: "#888888" },
         { type: "separator", margin: "md" },
-        { type: "text", text: "回覆「品名+價格」即可完成設定,例如「東京限定娃娃+850」,會直接更新這筆訂單並通知客人", size: "sm", wrap: true, margin: "md" },
+        { type: "text", text: "回覆「品名+價格」即可完成設定,例如「東京限定娃娃+850」(會套用到最舊一筆待報價訂單)", size: "sm", wrap: true, margin: "md" },
+        { type: "text", text: `若同時有多筆待報價,請加訂單編號,例如「${orderNo} 東京限定娃娃+850」,避免報錯客人`, size: "xs", color: "#c0392b", wrap: true, margin: "sm" },
+        { type: "text", text: "輸入「待報價清單」可查看目前所有排隊中的訂單", size: "xs", color: "#999999", wrap: true, margin: "sm" },
       ],
     },
   };
   if (validImageUrl(imageUrl)) {
     bubble.hero = { type: "image", url: imageUrl, size: "full", aspectRatio: "20:13", aspectMode: "cover" };
   }
-  return { type: "flex", altText: `新訂單待報價 · ${customerName}`, contents: bubble };
+  return { type: "flex", altText: `新訂單待報價 #${orderNo} · ${customerName}`, contents: bubble };
 }
 
 // 7. 通知客人:報價完成,點擊即可下單
@@ -636,7 +639,7 @@ async function handlePostback(event) {
       console.error("寫入 pending_quotes 失敗:", pqError.message || pqError);
     } else {
       await pushMessage(OWNER_LINE_USER_ID, [
-        buildOwnerNotifyFlex({ customerName, imageUrl: pending.image_url }),
+        buildOwnerNotifyFlex({ customerName, imageUrl: pending.image_url, orderNo: orderData.no }),
       ]);
     }
   } catch (err) {
@@ -708,42 +711,94 @@ async function handleQuantityUpdate(event, qtyUpdate) {
 // 格式:「品名+價格」,例如「東京限定娃娃+850」
 // 價格限制至少兩位數(>=10),避免跟客人的「品名+1」下單指令搞混
 function parseQuoteCommand(text) {
-  const m = text.trim().match(/^(.+?)\+(\d+)$/);
+  const trimmed = text.trim();
+  // 先試「訂單編號 品名+價格」格式,例如「123456 東京限定娃娃+850」
+  const withOrderNo = trimmed.match(/^(\d{6})\s+(.+?)\+(\d+)$/);
+  if (withOrderNo) {
+    const name = withOrderNo[2].trim();
+    const price = parseInt(withOrderNo[3], 10);
+    if (name && price && price >= 10) {
+      return { orderNo: withOrderNo[1], name, price };
+    }
+  }
+  // 沒有訂單編號 →「品名+價格」,套用到最舊一筆待報價訂單
+  const m = trimmed.match(/^(.+?)\+(\d+)$/);
   if (!m) return null;
   const name = m[1].trim();
   if (!name) return null;
   const price = parseInt(m[2], 10);
   if (!price || price < 10) return null;
-  return { name, price };
+  return { orderNo: null, name, price };
+}
+
+// 「待報價清單」→ 列出目前所有排隊中的訂單
+function isPendingQuoteListCommand(text) {
+  return text.trim() === "待報價清單";
 }
 
 async function handleOwnerQuote(event, quote) {
   const replyToken = event.replyToken;
 
-  const { data: pendingQuote } = await supabase
-    .from("pending_quotes")
-    .select("*")
-    .eq("quoted", false)
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle();
+  let pendingQuote = null;
+  let order = null;
 
-  if (!pendingQuote) {
-    await replyMessage(replyToken, [{ type: "text", text: "目前沒有待報價的訂單 📭" }]);
-    return;
-  }
+  if (quote.orderNo) {
+    // 有指定訂單編號 → 先找該訂單,再找對應的待報價紀錄
+    const { data: matchedOrder } = await supabase
+      .from("orders")
+      .select("*")
+      .eq("no", quote.orderNo)
+      .maybeSingle();
 
-  const { data: order } = await supabase
-    .from("orders")
-    .select("*")
-    .eq("id", pendingQuote.order_id)
-    .maybeSingle();
+    if (!matchedOrder) {
+      await replyMessage(replyToken, [{ type: "text", text: `找不到訂單編號 #${quote.orderNo}` }]);
+      return;
+    }
 
-  if (!order) {
-    console.error("找不到對應訂單:", pendingQuote.order_id);
-    await replyMessage(replyToken, [{ type: "text", text: "找不到對應訂單,可能已被刪除" }]);
-    await supabase.from("pending_quotes").update({ quoted: true }).eq("id", pendingQuote.id);
-    return;
+    const { data: matchedQuote } = await supabase
+      .from("pending_quotes")
+      .select("*")
+      .eq("order_id", matchedOrder.id)
+      .eq("quoted", false)
+      .maybeSingle();
+
+    if (!matchedQuote) {
+      await replyMessage(replyToken, [{ type: "text", text: `訂單 #${quote.orderNo} 不在待報價清單中(可能已經報價過,或編號不存在待處理紀錄)` }]);
+      return;
+    }
+
+    pendingQuote = matchedQuote;
+    order = matchedOrder;
+  } else {
+    // 沒有指定編號 → 抓最舊一筆待報價
+    const { data: oldestQuote } = await supabase
+      .from("pending_quotes")
+      .select("*")
+      .eq("quoted", false)
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+
+    if (!oldestQuote) {
+      await replyMessage(replyToken, [{ type: "text", text: "目前沒有待報價的訂單 📭" }]);
+      return;
+    }
+
+    const { data: matchedOrder } = await supabase
+      .from("orders")
+      .select("*")
+      .eq("id", oldestQuote.order_id)
+      .maybeSingle();
+
+    if (!matchedOrder) {
+      console.error("找不到對應訂單:", oldestQuote.order_id);
+      await replyMessage(replyToken, [{ type: "text", text: "找不到對應訂單,可能已被刪除" }]);
+      await supabase.from("pending_quotes").update({ quoted: true }).eq("id", oldestQuote.id);
+      return;
+    }
+
+    pendingQuote = oldestQuote;
+    order = matchedOrder;
   }
 
   const newItems = (order.items || []).map((it, idx) =>
@@ -783,7 +838,36 @@ async function handleOwnerQuote(event, quote) {
   }
 }
 
-// ── 主流程:處理 +1 建單 ─────────────────────────────────
+// 「待報價清單」→ 列出所有排隊中的訂單(訂單編號 + 客人名稱),方便多筆同時處理時先確認
+async function handlePendingQuoteList(event) {
+  const replyToken = event.replyToken;
+
+  const { data: pendingList } = await supabase
+    .from("pending_quotes")
+    .select("*")
+    .eq("quoted", false)
+    .order("created_at", { ascending: true });
+
+  if (!pendingList || pendingList.length === 0) {
+    await replyMessage(replyToken, [{ type: "text", text: "目前沒有待報價的訂單 📭" }]);
+    return;
+  }
+
+  const orderIds = pendingList.map((p) => p.order_id).filter(Boolean);
+  const { data: orders } = await supabase.from("orders").select("id, no").in("id", orderIds);
+  const noByOrderId = new Map((orders || []).map((o) => [o.id, o.no]));
+
+  const lines = pendingList.map((p, i) => {
+    const no = noByOrderId.get(p.order_id) || "?";
+    return `${i + 1}. #${no} · ${p.customer_name}`;
+  });
+
+  await replyMessage(replyToken, [
+    { type: "text", text: `📋 待報價清單(共 ${pendingList.length} 筆)\n\n${lines.join("\n")}\n\n回覆「訂單編號 品名+價格」指定報價,例如「${noByOrderId.get(pendingList[0].order_id)} 東京限定娃娃+850」` },
+  ]);
+}
+
+
 async function handlePlusOne(event, cmd) {
   const replyToken = event.replyToken;
   const lineUserId = event.source.userId;
@@ -973,6 +1057,16 @@ async function handleBindCommunityName(event, bind) {
 
       // 業者(機器人設定者)下報價指令 —— 只有 OWNER_LINE_USER_ID 才會被處理
       if (event.source.userId === OWNER_LINE_USER_ID) {
+        if (isPendingQuoteListCommand(trimmed)) {
+          try {
+            await handlePendingQuoteList(event);
+          } catch (err) {
+            console.error("handlePendingQuoteList 錯誤:", err);
+            await replyMessage(replyToken, [{ type: "text", text: "查詢時發生錯誤,請稍後再試" }]);
+          }
+          continue;
+        }
+
         const quote = parseQuoteCommand(trimmed);
         if (quote) {
           try {
