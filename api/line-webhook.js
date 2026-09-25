@@ -303,7 +303,28 @@ function buildBindMemberFlex() {
   };
 }
 
-// 5. 圖片許願建立成功卡片
+// 5. 訂單建立成功卡片(點「下單」按鈕後)
+function buildOrderCreatedFlex(imageUrl) {
+  const bubble = {
+    type: "bubble",
+    body: {
+      type: "box",
+      layout: "vertical",
+      spacing: "md",
+      contents: [
+        { type: "text", text: "🛒 已幫您登記下單!", weight: "bold", size: "lg", color: "#a8847e" },
+        { type: "text", text: "目前數量:1 件", size: "md", weight: "bold" },
+        { type: "text", text: "請直接回覆 +2、+3...,我會依您回覆的數量更新;我們也會盡快為您報價", size: "sm", color: "#888888", wrap: true },
+      ],
+    },
+  };
+  if (validImageUrl(imageUrl)) {
+    bubble.hero = { type: "image", url: imageUrl, size: "full", aspectRatio: "20:13", aspectMode: "cover" };
+  }
+  return { type: "flex", altText: "已幫您登記下單", contents: bubble };
+}
+
+// 5b. 許願建立成功卡片(點「許願」按鈕後)
 function buildWishCreatedFlex(imageUrl) {
   const bubble = {
     type: "bubble",
@@ -312,15 +333,49 @@ function buildWishCreatedFlex(imageUrl) {
       layout: "vertical",
       spacing: "md",
       contents: [
-        { type: "text", text: "✅ 訂單已建立", weight: "bold", size: "lg", color: "#a8847e" },
-        { type: "text", text: "我們會盡快為您報價,報價後會直接更新這筆訂單,不需要再操作", size: "sm", color: "#888888", wrap: true },
+        { type: "text", text: "🌟 已為您許願", weight: "bold", size: "lg", color: "#a8847e" },
+        { type: "text", text: "我們會盡快幫您尋找這個商品,找到後會通知您 ❤️", size: "sm", color: "#888888", wrap: true },
       ],
     },
   };
   if (validImageUrl(imageUrl)) {
     bubble.hero = { type: "image", url: imageUrl, size: "full", aspectRatio: "20:13", aspectMode: "cover" };
   }
-  return { type: "flex", altText: "訂單已建立", contents: bubble };
+  return { type: "flex", altText: "已為您許願", contents: bubble };
+}
+
+// 5c. 圖片收到後,詢問要「下單」還是「許願」
+function buildImageActionFlex(imageUrl) {
+  const bubble = {
+    type: "bubble",
+    body: {
+      type: "box",
+      layout: "vertical",
+      spacing: "md",
+      contents: [
+        { type: "text", text: "🛍 商品圖片已收到", weight: "bold", size: "lg", color: "#a8847e" },
+        { type: "text", text: "請選擇這張商品圖片要怎麼處理?", size: "sm", color: "#888888", wrap: true },
+        { type: "separator", margin: "md" },
+        { type: "text", text: "🛒 下單", weight: "bold", size: "md", margin: "md" },
+        { type: "text", text: "我要購買這個商品,接著可以回覆 +2、+3... 調整數量", size: "xs", color: "#999999", wrap: true },
+        { type: "text", text: "🌟 許願", weight: "bold", size: "md", margin: "md" },
+        { type: "text", text: "希望幫我找這個商品,許願後業者會看到", size: "xs", color: "#999999", wrap: true },
+      ],
+    },
+    footer: {
+      type: "box",
+      layout: "horizontal",
+      spacing: "sm",
+      contents: [
+        { type: "button", style: "primary", color: "#a8847e", action: { type: "postback", label: "🛒 下單", data: "action=create_order", displayText: "下單" } },
+        { type: "button", style: "secondary", action: { type: "postback", label: "🌟 許願", data: "action=wishlist", displayText: "許願" } },
+      ],
+    },
+  };
+  if (validImageUrl(imageUrl)) {
+    bubble.hero = { type: "image", url: imageUrl, size: "full", aspectRatio: "20:13", aspectMode: "cover" };
+  }
+  return { type: "flex", altText: "商品圖片已收到,請選擇下單或許願", contents: bubble };
 }
 
 // 6. 通知業者(Owner)有新的訂單待報價(客人傳圖 +1 直接建立,價格待補)
@@ -389,15 +444,17 @@ async function fetchLineImage(messageId) {
 // ── 處理客人傳圖片:下載後暫存,等待接續的 +1 ──────────────
 async function handleImageMessage(event) {
   const lineUserId = event.source.userId;
+  const replyToken = event.replyToken;
   try {
-    // 若之前已有暫存但客人沒接 +1 就傳新圖 → 先清掉舊的實體檔案,避免佔空間
+    // 若之前已有暫存但客人沒接續處理就傳新圖 → 先清掉舊的實體檔案,避免佔空間
+    // 但如果舊圖片已經被轉成訂單(order_id 有值),表示訂單還在引用這個檔案,不能刪除
     const { data: oldPending, error: selErr } = await supabase
       .from("pending_images")
-      .select("image_path")
+      .select("image_path, order_id")
       .eq("line_user_id", lineUserId)
       .maybeSingle();
     if (selErr) throw new Error(`查詢 pending_images 失敗:${selErr.message}`);
-    if (oldPending?.image_path) {
+    if (oldPending?.image_path && !oldPending.order_id) {
       await supabase.storage.from("product-images").remove([oldPending.image_path]).catch(() => {});
     }
 
@@ -411,11 +468,13 @@ async function handleImageMessage(event) {
     const { data: urlData } = supabase.storage.from("product-images").getPublicUrl(fileName);
 
     const { error: writeErr } = await supabase.from("pending_images").upsert(
-      [{ line_user_id: lineUserId, image_url: urlData.publicUrl, image_path: fileName, created_at: new Date().toISOString() }],
+      [{ line_user_id: lineUserId, image_url: urlData.publicUrl, image_path: fileName, order_id: null, created_at: new Date().toISOString() }],
       { onConflict: "line_user_id" }
     );
     if (writeErr) throw new Error(`寫入 pending_images 失敗:${writeErr.message}`);
-    // 圖片先靜默暫存,不主動回覆,避免干擾;等客人打 +1 才回應
+
+    // 立刻詢問客人要下單還是許願,不再需要客人另外打 +1
+    await replyMessage(replyToken, [buildImageActionFlex(urlData.publicUrl)]);
   } catch (err) {
     console.error("處理圖片失敗:", err.message || err);
   }
@@ -424,22 +483,11 @@ async function handleImageMessage(event) {
 // ── 處理裸「+1」:把剛才暫存的圖片變成許願清單項目 ──────────
 const PENDING_IMAGE_TTL_MS = 30 * 60 * 1000; // 30 分鐘內有效
 
-async function handleBarePlusOne(event) {
-  const replyToken = event.replyToken;
-  const lineUserId = event.source.userId;
+// ── 處理客人點擊「下單」或「許願」按鈕 ──────────────────────
+const PENDING_IMAGE_TTL_MS = 30 * 60 * 1000; // 30 分鐘內有效
 
-  const { data: member } = await supabase
-    .from("members")
-    .select("*")
-    .eq("line_user_id", lineUserId)
-    .maybeSingle();
-
-  if (!member) {
-    await replyMessage(replyToken, [buildBindMemberFlex()]);
-    return;
-  }
-
-  // 圖片跟 +1 可能是兩個幾乎同時到的獨立請求,圖片那邊可能還在處理中
+async function getFreshPendingImage(lineUserId, replyToken) {
+  // 圖片跟按鈕點擊可能是兩個幾乎同時到的獨立請求,圖片那邊可能還在處理中
   // → 查不到就短暫重試幾次,而不是立刻判定失敗
   let pending = null;
   const RETRY_DELAYS_MS = [400, 700, 1000]; // 共重試 3 次,累積約 2.1 秒
@@ -457,15 +505,13 @@ async function handleBarePlusOne(event) {
 
   if (!pending) {
     await replyMessage(replyToken, [
-      { type: "text", text: `請先傳一張圖片,再打 +1 快速建立賣場 📷\n\n${CONTACT_TEXT}` },
+      { type: "text", text: `圖片已經處理過或已失效,請重新傳一次圖片 📷\n\n${CONTACT_TEXT}` },
     ]);
-    return;
+    return null;
   }
 
   const ageMs = Date.now() - new Date(pending.created_at).getTime();
-
   if (ageMs > PENDING_IMAGE_TTL_MS) {
-    // 診斷用:把原始時間戳記印出來,方便判斷是「真的拖太久」還是「時間戳記本身有問題」
     console.error("圖片逾時診斷:", {
       lineUserId,
       pending_created_at: pending.created_at,
@@ -474,22 +520,70 @@ async function handleBarePlusOne(event) {
       ageMinutes: Math.round(ageMs / 60000),
       image_path: pending.image_path,
     });
-  }
-
-  await supabase.from("pending_images").delete().eq("line_user_id", lineUserId);
-
-  if (ageMs > PENDING_IMAGE_TTL_MS) {
+    await supabase.from("pending_images").delete().eq("line_user_id", lineUserId);
     if (pending.image_path) {
       await supabase.storage.from("product-images").remove([pending.image_path]).catch(() => {});
     }
     const minutesAgo = Math.round(ageMs / 60000);
     await replyMessage(replyToken, [
-      { type: "text", text: `圖片已逾時失效(距離傳圖已經過了約 ${minutesAgo} 分鐘,超過 30 分鐘的圖片會自動失效),請重新傳一次圖片再打 +1 📷` },
+      { type: "text", text: `圖片已逾時失效(距離傳圖已經過了約 ${minutesAgo} 分鐘,超過 30 分鐘的圖片會自動失效),請重新傳一次圖片 📷` },
     ]);
+    return null;
+  }
+
+  return pending;
+}
+
+async function handlePostback(event) {
+  const replyToken = event.replyToken;
+  const lineUserId = event.source.userId;
+  const params = new URLSearchParams(event.postback.data || "");
+  const action = params.get("action");
+  if (action !== "create_order" && action !== "wishlist") return;
+
+  const { data: member } = await supabase
+    .from("members")
+    .select("*")
+    .eq("line_user_id", lineUserId)
+    .maybeSingle();
+
+  if (!member) {
+    await replyMessage(replyToken, [buildBindMemberFlex()]);
     return;
   }
 
+  const pending = await getFreshPendingImage(lineUserId, replyToken);
+  if (!pending) return;
+
   const customerName = member.community_name || member.line_name || member.name || "LINE 客人";
+
+  if (action === "wishlist") {
+    const wishData = {
+      id: secureUid(),
+      customer_line_id: lineUserId,
+      customer_name: customerName,
+      name: "客人傳圖許願",
+      note: "透過 LINE Bot 傳圖許願",
+      img_url: pending.image_url,
+      link: "",
+      status: "searching",
+      created_at: new Date().toISOString(),
+    };
+    const { error } = await supabase.from("wishlist").insert([wishData]);
+    if (error) {
+      console.error("建立許願失敗:", error);
+      await replyMessage(replyToken, [
+        { type: "text", text: `建立失敗,請稍後再試一次 🙏\n\n${CONTACT_TEXT}` },
+      ]);
+      return;
+    }
+    // 許願不需要再追蹤數量,清掉暫存紀錄(但圖片檔案本身還被 wishlist.img_url 引用,不能刪)
+    await supabase.from("pending_images").delete().eq("line_user_id", lineUserId);
+    await replyMessage(replyToken, [buildWishCreatedFlex(pending.image_url)]);
+    return;
+  }
+
+  // action === "create_order"
   const orderData = {
     id: secureUid(),
     no: String(100000 + Math.floor(Math.random() * 900000)),
@@ -525,6 +619,9 @@ async function handleBarePlusOne(event) {
     return;
   }
 
+  // 保留 pending_images 紀錄(圖片檔案不能刪),記上 order_id,讓客人之後回覆 +N 可以調整數量
+  await supabase.from("pending_images").update({ order_id: orderData.id }).eq("line_user_id", lineUserId);
+
   // 建立「待報價」紀錄,並推播通知業者(機器人設定者)
   try {
     const { error: pqError } = await supabase.from("pending_quotes").insert([
@@ -549,7 +646,64 @@ async function handleBarePlusOne(event) {
     console.error("通知業者失敗:", err);
   }
 
-  await replyMessage(replyToken, [buildWishCreatedFlex(pending.image_url)]);
+  await replyMessage(replyToken, [buildOrderCreatedFlex(pending.image_url)]);
+}
+
+// ── 處理客人回覆「+2」「+3」等數字 → 更新剛才下單的數量(直接設定,不是累加) ──
+function parseQuantityUpdateCommand(text) {
+  const m = text.trim().match(/^\+(\d{1,3})$/);
+  if (!m) return null;
+  const qty = parseInt(m[1], 10);
+  if (!qty || qty <= 0 || qty > 999) return null;
+  return { qty };
+}
+
+// 回傳 true 代表已經處理過這則訊息(不用再往下交給其他指令判斷)
+async function handleQuantityUpdate(event, qtyUpdate) {
+  const replyToken = event.replyToken;
+  const lineUserId = event.source.userId;
+
+  const { data: pending } = await supabase
+    .from("pending_images")
+    .select("*")
+    .eq("line_user_id", lineUserId)
+    .maybeSingle();
+
+  if (!pending || !pending.order_id) {
+    return false; // 沒有可調整數量的訂單,交給後面的其他指令邏輯處理
+  }
+
+  const { data: order } = await supabase
+    .from("orders")
+    .select("*")
+    .eq("id", pending.order_id)
+    .maybeSingle();
+
+  if (!order) {
+    await supabase.from("pending_images").update({ order_id: null }).eq("line_user_id", lineUserId);
+    return false;
+  }
+
+  const newItems = (order.items || []).map((it, idx) =>
+    idx === 0 ? { ...it, qty: qtyUpdate.qty } : it
+  );
+  const newTotal = newItems.reduce((s, it) => s + (Number(it.price) || 0) * (Number(it.qty) || 1), 0);
+
+  const { error } = await supabase
+    .from("orders")
+    .update({ items: newItems, total: newTotal, updated_at: new Date().toISOString() })
+    .eq("id", order.id);
+
+  if (error) {
+    console.error("更新數量失敗:", error);
+    await replyMessage(replyToken, [{ type: "text", text: "更新失敗,請稍後再試 🙏" }]);
+    return true;
+  }
+
+  await replyMessage(replyToken, [
+    { type: "text", text: `✅ 已更新數量為 ${qtyUpdate.qty} 件。` },
+  ]);
+  return true;
 }
 
 // ── 業者報價指令:「品名+價格」,例如「東京限定娃娃+850」 ──────────
@@ -792,9 +946,19 @@ async function handleBindCommunityName(event, bind) {
 }
 
     for (const event of events) {
+      // 按鈕點擊(下單/許願)
+      if (event.type === "postback") {
+        try {
+          await handlePostback(event);
+        } catch (err) {
+          console.error("handlePostback 錯誤:", err);
+        }
+        continue;
+      }
+
       if (event.type !== "message") continue;
 
-      // 圖片訊息:先暫存,等待接續的 +1
+      // 圖片訊息:暫存 + 立刻詢問下單或許願
       if (event.message.type === "image") {
         try {
           await handleImageMessage(event);
@@ -836,17 +1000,19 @@ async function handleBindCommunityName(event, bind) {
         continue;
       }
 
-      // 裸 +1(前面沒帶商品名稱/編號)→ 檢查是否有剛傳的圖片,建立許願清單
-      if (trimmed === "+1") {
+      // 裸「+N」(前面沒帶商品名稱/編號)→ 更新剛才用按鈕下單的數量
+      const qtyUpdate = parseQuantityUpdateCommand(trimmed);
+      if (qtyUpdate) {
         try {
-          await handleBarePlusOne(event);
+          const handled = await handleQuantityUpdate(event, qtyUpdate);
+          if (handled) continue;
         } catch (err) {
-          console.error("handleBarePlusOne 錯誤:", err);
+          console.error("handleQuantityUpdate 錯誤:", err);
           await replyMessage(replyToken, [
             { type: "text", text: `處理時發生錯誤,請稍後再試 🙏\n\n${CONTACT_TEXT}` },
           ]);
+          continue;
         }
-        continue;
       }
 
       const cmd = parsePlusOneCommand(userText);
@@ -861,7 +1027,7 @@ async function handleBindCommunityName(event, bind) {
           ]);
         }
       }
-      // 非 +1 建單指令 → Bot 不回應,交由業者人工回覆(避免每句話都被 Bot 洗版)
+      // 非建單指令 → Bot 不回應,交由業者人工回覆(避免每句話都被 Bot 洗版)
     }
 
     res.status(200).json({ ok: true });
